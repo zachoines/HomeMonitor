@@ -1,10 +1,12 @@
 #include <stdio.h>
+#include <unistd.h>
+ 
 #include <iostream>
+#include <fstream>
+#include <string>
 #include "opencv2/opencv.hpp"
-// iclude <opencv2/dnn.hpp>
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/core/ocl.hpp"
-// #include <opencv2/core/ocl.hpp>
 #include "opencv4/opencv2/dnn/dnn.hpp"
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgcodecs/imgcodecs.hpp"
@@ -17,6 +19,8 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/videoio/videoio.hpp>
 #include <opencv2/imgcodecs/imgcodecs.hpp>
+
+
 
 using namespace cv;
 using namespace std;
@@ -63,12 +67,21 @@ Mat detect_from_video(Mat& src)
 	return src;
 }
 
+
+bool fileExists(const char* fileName)
+{
+	std::ifstream test(fileName);
+	return (test) ? true : false;
+}
+
+
 static cv::Mat GetImageFromCamera(cv::VideoCapture& camera)
 {
 	cv::Mat frame;
 	camera >> frame;
 	return frame;
 }
+
 
 
 int main(int argc, char** argv)
@@ -79,14 +92,27 @@ int main(int argc, char** argv)
 	Mat frame;
 	chrono::steady_clock::time_point Tbegin, Tend;
 	cv::VideoCapture camera(0);
+	std::cout << get_current_dir_name() << std::endl;
 
-	net = dnn::readNetFromCaffe("MobileNetSSD_deploy.prototxt", "MobileNetSSD_deploy.caffemodel");
-	if (net.empty()) {
-		cout << "init the model net error";
+
+	std::ifstream test(".\\MobileNetSSD_deploy.prototxt");
+	if (!test)
+	{
+		std::cout << "The file doesn't exist" << std::endl;
 		exit(-1);
 	}
 
-	cout << "Start grabbing, press ESC on Live window to terminate" << endl;
+	if (fileExists("MobileNetSSD_deploy.prototxt")) {
+		std::cout << "Everything works!!" << std::endl;
+	}
+
+	net = dnn::readNetFromCaffe("/MobileNetSSD_deploy.prototxt", "/MobileNetSSD_deploy.caffemodel");
+	if (net.empty()) {
+		std::cout << "init the model net error";
+		exit(-1);
+	}
+
+	std::cout << "Start grabbing, press ESC on Live window to terminate" << endl;
 	while ((cv::waitKey(1) & 0xFF) != 27) {
 		cv::Mat frame = GetImageFromCamera(camera);
 
@@ -107,9 +133,9 @@ int main(int argc, char** argv)
 		if (esc == 27) break;
 	}
 
-	cout << "Closing the camera" << endl;
-	destroyAllWindows();
-	cout << "Bye!" << endl;
+	std::cout << "Closing the camera" << endl;
+	cv::destroyAllWindows();
+	std::cout << "Bye!" << endl;
 
 	return 0;
 }

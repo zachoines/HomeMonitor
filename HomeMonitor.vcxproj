@@ -72,12 +72,25 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="MobileNetSSD_deploy.caffemodel">
+      <FileType>Document</FileType>
+      <RemoteCopyFile Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyFile>
+      <RemoteCopyToOutputDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyToOutputDir>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">false</ExcludedFromBuild>
+    </None>
+    <None Include="MobileNetSSD_deploy.prototxt">
+      <RemoteCopyFile Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyFile>
+      <FileType>Document</FileType>
+      <RemoteCopyToOutputDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyToOutputDir>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">false</ExcludedFromBuild>
+    </None>
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
-      <CppLanguageStandard>c++11</CppLanguageStandard>
+      <CppLanguageStandard>c++17</CppLanguageStandard>
       <AdditionalIncludeDirectories>/usr/local/include/opencv4/opencv2;/usr/local/include/opencv4;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>FullDebug</DebugInformationFormat>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
