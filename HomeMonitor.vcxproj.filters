@@ -1,0 +1,47 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="ObjectDetector.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="Servo.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="CascadeDetector.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="CaffeDetector.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="readme.md">
+      <Filter>resources</Filter>
+    </None>
+    <None Include="MobileNetSSD_deploy.caffemodel" />
+    <None Include="MobileNetSSD_deploy.prototxt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="src">
+      <UniqueIdentifier>{3b4520bf-504e-4831-ba1c-6f0bd1215201}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="resources">
+      <UniqueIdentifier>{0271a7ea-1607-47a1-a186-c2f7f7ff1ab9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ObjectDetector.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="Servo.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="CascadeDetector.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="CaffeDetector.h">
+      <Filter>src</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

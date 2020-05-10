@@ -71,8 +71,11 @@
     </RemotePostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CaffeDetector.cpp" />
+    <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="Source.cpp" />
+    <ClCompile Include="ObjectDetector.cpp" />
+    <ClCompile Include="Servo.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="MobileNetSSD_deploy.caffemodel">
@@ -87,6 +90,13 @@
       <RemoteCopyToOutputDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyToOutputDir>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">false</ExcludedFromBuild>
     </None>
+    <None Include="readme.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="CaffeDetector.h" />
+    <ClInclude Include="CascadeDetector.h" />
+    <ClInclude Include="ObjectDetector.h" />
+    <ClInclude Include="Servo.h" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
@@ -95,6 +105,7 @@
       <DebugInformationFormat>FullDebug</DebugInformationFormat>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <CompileAs>CompileAsCpp</CompileAs>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
