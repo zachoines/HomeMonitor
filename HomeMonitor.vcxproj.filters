@@ -14,6 +14,9 @@
     <ClCompile Include="CaffeDetector.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="PID.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="readme.md">
@@ -43,5 +46,11 @@
     <ClInclude Include="CaffeDetector.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="PID.h">
+      <Filter>src</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Xml Include="haarcascade_frontalface_alt2.xml" />
   </ItemGroup>
 </Project>

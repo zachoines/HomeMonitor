@@ -48,13 +48,13 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <IncludePath>$(IncludePath)</IncludePath>
-    <LibraryPath>/usr/include/opencv;$(LibraryPath)</LibraryPath>
+    <LibraryPath>/usr/include/opencv;/usr/include/;/usr/local/include/;$(LibraryPath)</LibraryPath>
     <SourcePath>$(SourcePath)</SourcePath>
     <RemoteCompileLocalCopyObjectFiles>true</RemoteCompileLocalCopyObjectFiles>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <Link>
-      <LibraryDependencies>opencv_core;opencv_imgcodecs;opencv_highgui;opencv_imgproc;opencv_video;opencv_videoio;opencv_dnn;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
+      <LibraryDependencies>wiringPi;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_video;opencv_videoio;opencv_dnn;raspicam;raspicam_cv;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
     </Link>
     <RemotePostBuildEvent>
       <Command>gpio export 17 out</Command>
@@ -75,6 +75,7 @@
     <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ObjectDetector.cpp" />
+    <ClCompile Include="PID.cpp" />
     <ClCompile Include="Servo.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -96,7 +97,11 @@
     <ClInclude Include="CaffeDetector.h" />
     <ClInclude Include="CascadeDetector.h" />
     <ClInclude Include="ObjectDetector.h" />
+    <ClInclude Include="PID.h" />
     <ClInclude Include="Servo.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Xml Include="haarcascade_frontalface_alt2.xml" />
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>

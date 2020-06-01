@@ -1,5 +1,8 @@
 #include "CaffeDetector.h"
 
+#include <vector>
+#include <string>
+
 namespace HM {
 
 	DetectionData CaffeDetector::detect(cv::Mat& src, std::string target)
@@ -30,8 +33,8 @@ namespace HM {
 					int frameWidth = (int)(x2 - x1);
 					int frameHeight = (int)(y2 - y1);
 
-					int objX = (int)x1 + ((int)width / 2);
-					int objY = (int)y1 + ((int)height / 2);
+					int objX = (int)x1 + ((int)frameWidth / 2);
+					int objY = (int)y1 + ((int)frameHeight / 2);
 
 					this->last_frame = &src;
 					struct Rect objectBounds = { .x = x1, .y = y1, .height = frameHeight , .width = frameWidth };
@@ -46,7 +49,7 @@ namespace HM {
 		return detectionResults;
 	}
 
-	// Draws framerate, bounding box, and a center circle onto frame. Well used for debugging.
+	// Draws bounding box and center circle onto frame. Good for debugging.
 	DetectionData CaffeDetector::detect(cv::Mat& src, std::string target, bool draw)
 	{
 		struct DetectionData detectionResults = this->detect(src, target);
@@ -62,11 +65,12 @@ namespace HM {
 				circle(
 					src, 
 					cv::Point(detectionResults.targetCenterX, detectionResults.targetCenterY), 
-					30, red, 2, 8, 0);
+					(int)(detectionResults.boundingBox.width + detectionResults.boundingBox.height) / 2 / 10,
+					red, 2, 8, 0);
 				rectangle(src, rec, red, 2, 8, 0);
 				putText(
 					src, 
-					cv::format("%s", detectionResults.target), 
+					target, 
 					cv::Point(detectionResults.boundingBox.x, detectionResults.boundingBox.y - 5), 
 					cv::FONT_HERSHEY_SIMPLEX, 
 					1.0, 
@@ -77,6 +81,7 @@ namespace HM {
 		return detectionResults;
 	}
 
+
 	void CaffeDetector::setConfidenceThreshold(float ct)
 	{
 		if (ct < 0) {
@@ -86,9 +91,11 @@ namespace HM {
 		this->confidence_threshold = ct;
 	}
 
-	CaffeDetector::CaffeDetector(cv::dnn::Net net, std::string* class_names)
+	CaffeDetector::CaffeDetector(cv::dnn::Net net, std::vector<std::string> class_names)
 	{
+	
 		this->class_names = class_names;
+
 		this->net = &net;
 
 		if (this->net->empty()) {

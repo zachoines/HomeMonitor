@@ -12,8 +12,7 @@ namespace HM {
 		float confidence_threshold = 0.25;
 
 	public:
-		CaffeDetector();
-		CaffeDetector(cv::dnn::Net net, std::string* class_names);
+		CaffeDetector(cv::dnn::Net net, std::vector<std::string> class_names);
 		struct DetectionData detect(cv::Mat& src, std::string target);
 		struct DetectionData detect(cv::Mat& src, std::string target, bool draw);
 

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string>
+#include <vector>
 
 #include "opencv2/opencv.hpp"
 #include "opencv4/opencv2/dnn/dnn.hpp"
@@ -26,7 +27,7 @@ namespace HM {
 	class ObjectDetector
 	{
 	protected:
-		std::string* class_names = nullptr;
+		std::vector<std::string> class_names;
 		cv::Mat* last_frame = nullptr;
 		cv::dnn::Net* net = nullptr;
 
