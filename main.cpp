@@ -18,6 +18,7 @@
 #include <sys/wait.h> 
 #include <sys/prctl.h>
 #include <signal.h>
+#include <ctime>
 
 // 3rd party Dynamic libs
 #include <wiringPi.h>
@@ -177,6 +178,22 @@ int main(int argc, char** argv)
 
 	// Parent process
 	if (pid > 0) {
+		
+		// user hyperparams
+		float recheckChance = 0.1;
+		bool useTracking = true;
+		bool draw = true;
+		bool showVideo = true;
+		std::string target = "face";
+
+		// program state variables
+		bool rechecked = false;
+		bool isTracking = false;
+		bool isSearching = false;
+
+		// Create object tracker to optimize detection performance
+		cv::Rect2d roi;
+		Ptr<Tracker> tracker = cv::TrackerCSRT::create();
 
 		// Object center coordinates
 		int frameCenterX = 0;
@@ -186,7 +203,6 @@ int main(int argc, char** argv)
 		int objX = 0;
 		int objY = 0;
 
-		bool showVideo = true;
 		float f;
 		float FPS[16];
 		int i, Fcnt = 0;
@@ -199,7 +215,7 @@ int main(int argc, char** argv)
 			"sheep", "sofa", "train", "tvmonitor"
 		};
 
-		cv::Mat frame, tmp;
+		cv::Mat frame, tmp, gray, smallImg;
 		cv::Mat detection;
 		chrono::steady_clock::time_point Tbegin, Tend;
 
@@ -209,8 +225,7 @@ int main(int argc, char** argv)
 			cout << "Cannot open the camera!" << endl;
 			exit(-1);
 		}
-
-		/*
+		
 		std::string prototextFile = "/MobileNetSSD_deploy.prototxt";
 		std::string modelFile = "/MobileNetSSD_deploy.caffemodel";
 		std::string path = get_current_dir_name();
@@ -229,11 +244,17 @@ int main(int argc, char** argv)
 			exit(-1);
 		}
 
-		HM::CaffeDetector cd(net, class_names);*/
+		//HM::CaffeDetector cd(net, class_names);
 		HM::CascadeDetector cd;
 		HM::DetectionData result;
 
 		while (waitKey(1) < 0) {
+
+			if (isSearching) {
+				isSearching = false;
+
+				// TODO:: Perform search reutine
+			}
 
 			Tbegin = chrono::steady_clock::now();
 
@@ -244,37 +265,133 @@ int main(int argc, char** argv)
 				if (frame.empty())
 				{
 					std::cout << "Issue reading frame!" << std::endl;
-					sleep(1);
 					continue;
 				}
 
-				result = cd.detect(frame, "person", showVideo);
+				// Convert to Gray Scale and resize
+				double fx = 1 / 1.0;
+				cv:resize(frame, smallImg, cv::Size(frame.cols / 2,  frame.rows / 2), fx, fx, cv::INTER_LINEAR);
+				
+				std::cout << "Here we are" << std::endl;
+				if (!useTracking) {
+					goto detect;
+				}
+				
+				cv::cvtColor(smallImg, gray, cv::COLOR_BGR2GRAY);
+				cv::equalizeHist(gray, gray);
 
-				if (result.found) {
+				if (isTracking) {
+					
+					std::cout << "Tracking Target..." << std::endl;
+					
+					// Get the new tacking result
+					if (!tracker->update(gray, roi)) {
+						isTracking = false;
+						goto detect;
+					}
+
+					// Chance to revalidate object tracking quality
+					if (recheckChance >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
+						result = cd.detect(gray, target, draw);
+						std::cout << "Rechecking quality..." << std::endl;
+						if (!result.found) { 
+							rechecked = true;
+							goto detect;
+						}
+					}
 
 					// Determine object and frame centers
-					frameCenterX = static_cast<int>(frame.cols / 2);
-					frameCenterY = static_cast<int>(frame.rows / 2);
-					objX = result.targetCenterX;
-					objY = result.targetCenterY;
+					frameCenterX = static_cast<int>(smallImg.cols / 2);
+					frameCenterY = static_cast<int>(smallImg.rows / 2);
+					objX = roi.x + roi.width * 0.5;
+					objY = roi.y + roi.height * 0.5;
 
+					// Determin error
 					double tlt_error = frameCenterY - objY;
 					double pan_error = frameCenterX - objX;
 
-					r_write(pipes[0][1], &tlt_error, sizeof(tlt_error));
-					r_write(pipes[1][1], &pan_error, sizeof(pan_error));
+					// Send to child process
+					write(pipes[0][1], &tlt_error, sizeof(tlt_error));
+					write(pipes[1][1], &pan_error, sizeof(pan_error));
 
+					// draw to frame
+					if (draw) {
+						cv::Scalar color = cv::Scalar(255);
+						cv::Rect rec(
+							roi.x,
+							roi.y,
+							roi.width,
+							roi.height
+						);
+						circle(
+							smallImg,
+							cv::Point(objX, objY),
+							(int)(roi.width + roi.height) / 2 / 10,
+							color, 2, 8, 0);
+						rectangle(smallImg, rec, color, 2, 8, 0);
+						putText(
+							smallImg,
+							target,
+							cv::Point(roi.x, roi.y - 5),
+							cv::FONT_HERSHEY_SIMPLEX,
+							1.0,
+							color, 2, 8, 0);
+					}
 				}
+				else {
+					
+					detect: 
+					if (!rechecked) {
+						result = cd.detect(gray, target, draw);
+						rechecked = false;
+					}
+
+					if (useTracking) {
+						std::cout << "Lost Target!!" << std::endl;
+					}
+					
+					if (result.found) {
+
+						// Determine object and frame centers
+						frameCenterX = static_cast<int>(gray.cols / 2);
+						frameCenterY = static_cast<int>(gray.rows / 2);
+						objX = result.targetCenterX;
+						objY = result.targetCenterY;
+
+						double tlt_error = frameCenterY - objY;
+						double pan_error = frameCenterX - objX;
+
+						write(pipes[0][1], &tlt_error, sizeof(tlt_error));
+						write(pipes[1][1], &pan_error, sizeof(pan_error));
+						
+						
+						if (useTracking) {
+
+							roi.x = result.boundingBox.x;
+							roi.y = result.boundingBox.y;
+							roi.width = result.boundingBox.width;
+							roi.height = result.boundingBox.height;
+
+							if (tracker->init(gray, roi)) {
+								isTracking = true;
+							}
+						}
+					}
+					else {
+						isSearching = true;
+					}
+				}				
 				
 				if (showVideo) {
-					Tend = chrono::steady_clock::now();
-					f = chrono::duration_cast <chrono::milliseconds> (Tend - Tbegin).count();
-					if (f > 0.0) FPS[((Fcnt++) & 0x0F)] = 1000.0 / f;
-					for (f = 0.0, i = 0; i < 16; i++) { f += FPS[i]; }
-
-
-					putText(frame, format("FPS %0.2f", f / 16), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 255));
-					imshow("frame", frame);
+					if (draw) {
+						Tend = chrono::steady_clock::now();
+						f = chrono::duration_cast <chrono::milliseconds> (Tend - Tbegin).count();
+						if (f > 0.0) FPS[((Fcnt++) & 0x0F)] = 1000.0 / f;
+						for (f = 0.0, i = 0; i < 16; i++) { f += FPS[i]; }
+						putText(smallImg, format("FPS %0.2f", f / 16), Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255));
+					}
+		
+					imshow("frame", smallImg);
 				}
 			}
 			catch (const std::exception&)
@@ -312,36 +429,43 @@ int main(int argc, char** argv)
 		// Keep track of position information
 		double tlt_error;
 		double pan_error;
-		double angleX;
-		double angleY;
-		double currentAngleX = 90.0;
-		double currentAngleY = 90.0;
+		int angleX;
+		int angleY;
+		int currentAngleX = 90;
+		int currentAngleY = 90;
 
 		while (true) {
 
-			if (r_read(pipes[0][0], &tlt_error, sizeof(tlt_error)) == sizeof(tlt_error)) {
-				if (r_read(pipes[1][0], &pan_error, sizeof(pan_error)) == sizeof(pan_error)) {
+			if (read(pipes[0][0], &tlt_error, sizeof(tlt_error)) == sizeof(tlt_error)) {
+				if (read(pipes[1][0], &pan_error, sizeof(pan_error)) == sizeof(pan_error)) {
 					
 					// Calc new angle and update servos
-					angleX = pan.update(pan_error, 0);
-					angleY = tilt.update(tlt_error, 0) * -1;
+					angleX = static_cast<int>(pan.update(pan_error, 0));
+					angleY = static_cast<int>(tilt.update(tlt_error, 0)) * -1;
 
-					std::cout << "X: ";
+					std::cout << "Error X: ";
+					std::cout << pan_error;
+					std::cout << ", Error Y: ";
+					std::cout << tlt_error;
+
+					std::cout << "; X: ";
 					std::cout << angleX;
 					std::cout << ", Y: ";
 					std::cout << angleY << std::endl;
 
 					if (currentAngleX != angleX) {
-						int mappedX = mapOutput(static_cast<int>(angleX), -90, 90, 0, 180);
+						int mappedX = mapOutput(angleX, -90, 90, 0, 180);
 						sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
 						currentAngleX = angleX;
 					}
 
 					if (currentAngleY != angleY) {
-						int mappedY = mapOutput(static_cast<int>(angleY), -90, 90, 0, 180);
+						int mappedY = mapOutput(angleY, -90, 90, 0, 180);
 						sendComand(0x3, static_cast<unsigned char>(mappedY), fd);
 						currentAngleY = angleY;
 					}
+					
+					delay(250);
 				}
 			}
 		}	

@@ -54,7 +54,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <Link>
-      <LibraryDependencies>wiringPi;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_video;opencv_videoio;opencv_dnn;raspicam;raspicam_cv;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
+      <LibraryDependencies>wiringPi;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_tracking;opencv_video;opencv_videoio;opencv_dnn;raspicam;raspicam_cv;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
     </Link>
     <RemotePostBuildEvent>
       <Command>gpio export 17 out</Command>

@@ -13,20 +13,26 @@ namespace HM {
 		this->last_frame = &src;
 		std::vector<cv::Rect> faces;
 
-		cv::Mat gray, smallImg;
+		if (input_color) {
+			// Detect faces of different sizes using cascade classifier  
+			this->cascade.detectMultiScale(src, faces, 1.3,
+				2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(75, 75));
+			
+		}
+		else {
+			cv::Mat gray, smallImg;
 
-		cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY); // Convert to Gray Scale 
-		double fx = 1 / scale;
+			cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY); // Convert to Gray Scale 
+			double fx = 1 / scale;
 
-		// Resize the Grayscale Image  
-		cv:resize(gray, smallImg, cv::Size(), fx, fx, cv::INTER_LINEAR);
-		cv::equalizeHist(smallImg, smallImg);
+			// Resize the Grayscale Image  
+			cv:resize(gray, smallImg, cv::Size(), fx, fx, cv::INTER_LINEAR);
+			cv::equalizeHist(smallImg, smallImg);
 
-		// Detect faces of different sizes using cascade classifier  
-		this->cascade.detectMultiScale(smallImg, faces, 1.3,
-			2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(75, 75));
-
-
+			// Detect faces of different sizes using cascade classifier  
+			this->cascade.detectMultiScale(smallImg, faces, 1.3,
+				2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(75, 75));
+		}
 
 		if (!faces.empty() && !faces[0].empty()) {
 
@@ -56,7 +62,7 @@ namespace HM {
 		struct DetectionData detectionResults = this->detect(src, "face");
 		if (draw) {
 			if (detectionResults.found) {
-				cv::Scalar red = cv::Scalar(0, 0, 255);
+				cv::Scalar color = cv::Scalar(255);
 				cv::Rect rec(
 					detectionResults.boundingBox.x,
 					detectionResults.boundingBox.y,
@@ -67,15 +73,15 @@ namespace HM {
 					src,
 					cv::Point(detectionResults.targetCenterX, detectionResults.targetCenterY),
 					(int)(detectionResults.boundingBox.width + detectionResults.boundingBox.height) / 2 / 10,
-					red, 2, 8, 0);
-				rectangle(src, rec, red, 2, 8, 0);
+					color, 2, 8, 0);
+				rectangle(src, rec, color, 2, 8, 0);
 				putText(
 					src,
 					"face",
 					cv::Point(detectionResults.boundingBox.x, detectionResults.boundingBox.y - 5),
 					cv::FONT_HERSHEY_SIMPLEX,
 					1.0,
-					red, 2, 8, 0);
+					color, 2, 8, 0);
 			}
 		}
 

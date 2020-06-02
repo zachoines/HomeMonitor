@@ -55,7 +55,7 @@ namespace HM {
 		struct DetectionData detectionResults = this->detect(src, target);
 		if (draw) {
 			if (detectionResults.found) {
-				cv::Scalar red = cv::Scalar(0, 0, 255);
+				cv::Scalar color = cv::Scalar(255);
 				cv::Rect rec(
 					detectionResults.boundingBox.x, 
 					detectionResults.boundingBox.y, 
@@ -66,15 +66,15 @@ namespace HM {
 					src, 
 					cv::Point(detectionResults.targetCenterX, detectionResults.targetCenterY), 
 					(int)(detectionResults.boundingBox.width + detectionResults.boundingBox.height) / 2 / 10,
-					red, 2, 8, 0);
-				rectangle(src, rec, red, 2, 8, 0);
+					color, 2, 8, 0);
+				rectangle(src, rec, color, 2, 8, 0);
 				putText(
 					src, 
 					target, 
 					cv::Point(detectionResults.boundingBox.x, detectionResults.boundingBox.y - 5), 
 					cv::FONT_HERSHEY_SIMPLEX, 
 					1.0, 
-					red, 2, 8, 0 );
+					color, 2, 8, 0 );
 			}
 		}
 

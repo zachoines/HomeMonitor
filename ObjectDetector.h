@@ -30,11 +30,12 @@ namespace HM {
 		std::vector<std::string> class_names;
 		cv::Mat* last_frame = nullptr;
 		cv::dnn::Net* net = nullptr;
+		int input_color = 1; // 0 is color; 1 is gray
 
 	public:
 		ObjectDetector();
 		virtual struct DetectionData detect(cv::Mat& src, std::string target) = 0;
-
+		void setInputColor(int code);
 	};
 }
 
