@@ -24,6 +24,8 @@
     </None>
     <None Include="MobileNetSSD_deploy.caffemodel" />
     <None Include="MobileNetSSD_deploy.prototxt" />
+    <None Include="goturn.prototxt" />
+    <None Include="goturn.caffemodel" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="src">

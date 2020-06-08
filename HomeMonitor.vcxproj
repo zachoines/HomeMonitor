@@ -79,6 +79,14 @@
     <ClCompile Include="Servo.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="goturn.caffemodel">
+      <RemoteCopyFile Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyFile>
+      <RemoteCopyToOutputDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyToOutputDir>
+    </None>
+    <None Include="goturn.prototxt">
+      <RemoteCopyFile Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyFile>
+      <RemoteCopyToOutputDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyToOutputDir>
+    </None>
     <None Include="MobileNetSSD_deploy.caffemodel">
       <FileType>Document</FileType>
       <RemoteCopyFile Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyFile>
