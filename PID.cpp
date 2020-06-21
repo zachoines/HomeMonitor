@@ -65,4 +65,18 @@ double PID::update(double error, int sleep) {
 	return output;
 }
 
+void PID::getWeights(double w[3])
+{
+	w[0] = _kP;
+	w[0] = _kD;
+	w[0] = _kI;
+}
+
+void PID::setWeights(double kP, double kI, double kD)
+{
+	_kP = kP;
+	_kI = kI;
+	_kD = kD;
+}
+
 

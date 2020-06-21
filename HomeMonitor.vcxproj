@@ -31,6 +31,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'" Label="Configuration">
     <UseDebugLibraries>true</UseDebugLibraries>
+    <UseOfStl>libstdc++_shared</UseOfStl>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'" Label="Configuration">
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -48,13 +49,13 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <IncludePath>$(IncludePath)</IncludePath>
-    <LibraryPath>/usr/include/opencv;/usr/include/;/usr/local/include/;$(LibraryPath)</LibraryPath>
+    <LibraryPath>/usr/include/opencv;/usr/include/;/usr/local/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/api/include/;/usr/include/boost;$(LibraryPath)</LibraryPath>
     <SourcePath>$(SourcePath)</SourcePath>
     <RemoteCompileLocalCopyObjectFiles>true</RemoteCompileLocalCopyObjectFiles>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <Link>
-      <LibraryDependencies>wiringPi;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_tracking;opencv_video;opencv_videoio;opencv_dnn;raspicam;raspicam_cv;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
+      <LibraryDependencies>boost_system;torch;torch_cpu;c10;wiringPi;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_tracking;opencv_video;opencv_videoio;opencv_dnn;raspicam;raspicam_cv;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
     </Link>
     <RemotePostBuildEvent>
       <Command>gpio export 17 out</Command>
@@ -74,9 +75,10 @@
     <ClCompile Include="CaffeDetector.cpp" />
     <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="Model.cpp" />
     <ClCompile Include="ObjectDetector.cpp" />
     <ClCompile Include="PID.cpp" />
-    <ClCompile Include="Servo.cpp" />
+    <ClCompile Include="util.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="goturn.caffemodel">
@@ -104,9 +106,10 @@
   <ItemGroup>
     <ClInclude Include="CaffeDetector.h" />
     <ClInclude Include="CascadeDetector.h" />
+    <ClInclude Include="data.h" />
+    <ClInclude Include="Model.h" />
     <ClInclude Include="ObjectDetector.h" />
     <ClInclude Include="PID.h" />
-    <ClInclude Include="Servo.h" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />
@@ -114,7 +117,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
       <CppLanguageStandard>c++17</CppLanguageStandard>
-      <AdditionalIncludeDirectories>/usr/local/include/opencv4/opencv2;/usr/local/include/opencv4;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>/usr/local/include/opencv4/opencv2;/usr/local/include/opencv4;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/api/include/;/usr/include/boost/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>FullDebug</DebugInformationFormat>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
@@ -122,13 +125,12 @@
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>
-      </AdditionalOptions>
+      <AdditionalLibraryDirectories>/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/lib/;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>-D_GLIBCXX_USE_CXX11_ABI=0</AdditionalOptions>
       <NoExecStackRequired>false</NoExecStackRequired>
       <Relocation>false</Relocation>
       <FunctionBinding>false</FunctionBinding>
-      <SharedLibrarySearchPath>/usr/lib;/usr/local/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
+      <SharedLibrarySearchPath>/usr/lib;usr/local/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

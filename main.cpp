@@ -1,8 +1,7 @@
-// C++ libs
+﻿// C++ libs
 #include <iostream>
-#include <fstream>
 #include <string>
-#include <iostream>
+#include <vector>
 #include <filesystem>
 
 // C libs
@@ -17,17 +16,20 @@
 #include <sys/wait.h> 
 #include <sys/prctl.h>
 #include <signal.h>
-#include <ctime>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <malloc.h>
 #include <sys/mman.h>
 #include <errno.h>
 
-// 3rd party Dynamic libs
+// 3rd party libs
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
-#include <softPwm.h>  /* include header file for software PWM */
+#include <torch/torch.h>
+#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/containers/vector.hpp>
+#include <boost/interprocess/allocators/allocator.hpp>
+#include <algorithm>
 
 // OpenCV imports
 #include "opencv2/opencv.hpp"
@@ -42,236 +44,32 @@
 #include "opencv2/video/video.hpp"
 #include <opencv2/tracking.hpp>
 
-// Local classes
+// Local classes and files
 #include "CaffeDetector.h"
 #include "CascadeDetector.h"
 #include "PID.h"
+#include "Model.h"
+#include "util.h"
+#include "data.h"
 
 #define ARDUINO_ADDRESS 0x9
 
 using namespace cv;
 using namespace std;
-
-pid_t parent_pid;
-
-bool fileExists(std::string fileName)
-{
-	std::ifstream test(fileName);
-	return (test) ? true : false;
-}
-
-static cv::Mat GetImageFromCamera(cv::VideoCapture& camera)
-{
-	cv::Mat frame;
-	camera >> frame;
-	return frame;
-}
-
-int printDirectory(const char* path) {
-	DIR* dir;
-	struct dirent* ent;
-	if ((dir = opendir(path)) != NULL) {
-
-		while ((ent = readdir(dir)) != NULL) {
-			printf("%s\n", ent->d_name);
-		}
-		closedir(dir);
-	}
-	else {
-
-		perror("");
-		return EXIT_FAILURE;
-	}
-
-	return 0;
-}
-
-int mapOutput(int x, int in_min, int in_max, int out_min, int out_max) {
-	return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
-// Return response data
-void sendComand(unsigned char command, unsigned char data, int fd) {
-	unsigned short finalCommand = (command << 8) + data;
-	wiringPiI2CWriteReg16(fd, 0, finalCommand);
-}
-
-// FD read that handles interrupts
-ssize_t r_read(int fd, void* buf, size_t size)
-{
-	ssize_t retval;
-
-	while (retval = read(fd, buf, size), retval == -1 && errno == EINTR);
-
-	return retval;
-}
-
-// FD write that handles interrupts
-ssize_t r_write(int fd, void* buf, size_t size)
-{
-	char* bufp;
-	size_t bytestowrite;
-	ssize_t byteswritten;
-	size_t totalbytes;
-
-	for (bufp = (char*)buf, bytestowrite = size, totalbytes = 0;
-
-		bytestowrite > 0; bufp += byteswritten, bytestowrite -= byteswritten)
-	{
-		byteswritten = write(fd, bufp, bytestowrite);
-		if ((byteswritten) == -1 && (errno != EINTR))
-			return -1;
-
-		if (byteswritten == -1)
-			byteswritten = 0;
-
-		totalbytes += byteswritten;
-	}
-	return totalbytes;
-}
-
+using namespace Utility;
 
 // Last signal caught
-volatile sig_atomic_t sig_value1;
+volatile sig_atomic_t sig_value1; 
+volatile sig_atomic_t sig_value2;
+pid_t parent_pid;
 
-static void usr_sig_handler1(const int sig_number, siginfo_t* sig_info, void* context)
-{
-	// Take care of all segfaults
-	if (sig_number == SIGSEGV)
-	{
-		perror("Address access error");
-		exit(-1);
-	}
-
-	sig_value1 = sig_number;
-}
-
-void sigquit_handler(int sig) {
-	assert(sig == SIGQUIT);
-	pid_t self = getpid();
-	if (parent_pid != self) _exit(0);
-}
-
-typedef struct parameter {
-	PID* pan;
-	PID* tilt;
-	int* ShmPTR;
-	int rate; // Updates per second
-	int fd;
-} param;
-
-int msleep(long msec)
-{
-	struct timespec ts;
-	int res;
-
-	if (msec < 0)
-	{
-		errno = EINVAL;
-		return -1;
-	}
-
-	ts.tv_sec = msec / 1000;
-	ts.tv_nsec = (msec % 1000) * 1000000;
-
-	do {
-		res = nanosleep(&ts, &ts);
-	} while (res && errno == EINTR);
-
-	return res;
-}
-
-void* tiltThread(void* args) {
-
-	param* parameters = (param*)args;
-
-	PID* tilt = parameters->tilt;
-	int* ShmPTR = parameters->ShmPTR;
-	int milis = 1000 / parameters->rate;
-	int fd = parameters->fd;
-
-	tilt->init();
-	int angleY;
-	int currentAngleY = 90;
-
-
-	while (true) {
-
-		if (ShmPTR[4]) { // If the target is locked on
-			if (ShmPTR[2] && ShmPTR[5] != 1) { // If we are ready to read
-				angleY = static_cast<int>(tilt->update(static_cast<double>(ShmPTR[0]), 0)) * -1;
-				ShmPTR[5] = 1;
-			}
-			else {
-				continue;
-			}
-
-			std::cout << "Y: ";
-			std::cout << angleY << endl;
-
-			if (currentAngleY != angleY) {
-
-				int mappedY = mapOutput(angleY, -90, 90, 0, 180);
-				sendComand(0x3, static_cast<unsigned char>(mappedY), fd);
-				currentAngleY = angleY;
-			}
-		}
-		else {
-			tilt->init();
-		}
-		
-		msleep(milis);
-	}
-	
-	return NULL;
-}
-
-void* panThread(void* args) {
-	param* parameters = (param*)args;
-
-	PID* pan = parameters->pan;
-	int* ShmPTR = parameters->ShmPTR;
-	int milis = 1000 / parameters->rate;
-	int fd = parameters->fd;
-
-	pan->init();
-	int angleX;
-	int currentAngleX = 90;
-
-	while (true) {
-
-		if (ShmPTR[4]) { // If the target is locked on
-			if (ShmPTR[3] && !ShmPTR[6]) { // If the we are ready to read and not already have read it
-				angleX = static_cast<int>(pan->update(static_cast<double>(ShmPTR[1]), 0));
-				ShmPTR[6] = 1;
-			}
-			else {
-				continue;
-			}
-		}
-		else {
-			pan->init();
-		}
-	
-		std::cout << "X: "; 
-		std::cout << angleX << endl;
-
-		if (currentAngleX != angleX) {
-			int mappedX = mapOutput(angleX, -90, 90, 0, 180);
-			sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
-			currentAngleX = angleX;
-		}
-
-		msleep(milis);
-	}
-	
-	return NULL;
-}
+static void usr_sig_handler1(const int sig_number, siginfo_t* sig_info, void* context);
+void* tiltThread(void* args);
+void* panThread(void* args);
 
 int main(int argc, char** argv)
 {
 	// Register signal handler
-	signal(SIGQUIT, sigquit_handler);
 	parent_pid = getpid();
 
 	// Setup I2C comms and devices
@@ -286,37 +84,38 @@ int main(int argc, char** argv)
 
 	// Init shared memory
 	int ShmID;
-	int* ShmPTR;
+	int* ShmPTRParent;
+	int* ShmPTRChild;
 	int status;
 
-	ShmID = shmget(IPC_PRIVATE, 5 * sizeof(int), IPC_CREAT | 0666);
+	ShmID = shmget(IPC_PRIVATE, 7 * sizeof(int), IPC_CREAT | 0666);
 
 	if (ShmID < 0) {
 		throw "Could not initialize shared memory";
 	}
-
-	ShmPTR = (int*)shmat(ShmID, NULL, 0);
-
-	if ((int)ShmPTR == -1) {
-		throw "Could not initialize shared memory";
-	}
-
-	// These values allow for async communication between parent process and child process's threads
-	// These garentee, in a non-blocking way, that the child process will never read a value twice
-	// But the childs threads may be reading old values at any given time.
-	ShmPTR[0] = 0; // Tilt error
-	ShmPTR[1] = 0; // Pan error
-	ShmPTR[2] = 1; // Tilt lock
-	ShmPTR[3] = 1; // Pan lock
-	ShmPTR[4] = 1; // Reset signal
-	ShmPTR[5] = 0; // Tilt read
-	ShmPTR[6] = 0; // Pan read
 
 	// Parent process is image recognition, child is PID and servo controller
 	pid_t pid = fork();
 
 	// Parent process
 	if (pid > 0) {
+
+		ShmPTRParent = (int*)shmat(ShmID, 0, 0);
+
+		if ((int)ShmPTRParent == -1) {
+			throw "Could not initialize shared memory";
+		}
+
+		// These values allow for async communication between parent process and child process's threads
+		// These garentee, in a non-blocking way, the child process will never read a value twice.
+		// But the child's threads may be reading old values at any given time.
+		ShmPTRParent[0] = 0; // Tilt error
+		ShmPTRParent[1] = 0; // Pan error
+		ShmPTRParent[2] = 1; // Tilt lock
+		ShmPTRParent[3] = 1; // Pan lock
+		ShmPTRParent[4] = 1; // Reset signal
+		ShmPTRParent[5] = 0; // Tilt read
+		ShmPTRParent[6] = 0; // Pan read
 
 		// user hyperparams
 		float recheckChance = 0.01;
@@ -414,7 +213,6 @@ int main(int argc, char** argv)
 				// Convert to Gray Scale and resize
 				double fx = 1 / 1.0;
 				cv::flip(frame, frame, -1);
-				// smallImg = frame;
 				// cv::cvtColor(frame, frame, cv::COLOR_BGR2GRAY);
 				// cv::equalizeHist(gray, gray);
 				// resize(frame, frame, cv::Size(frame.cols / 2,  frame.rows / 2), fx, fx, cv::INTER_LINEAR);
@@ -424,8 +222,6 @@ int main(int argc, char** argv)
 				}
 
 				if (isTracking) {
-
-					std::cout << "Tracking Target..." << std::endl;
 
 					// Get the new tracking result
 					if (!tracker->update(frame, roi)) {
@@ -437,6 +233,7 @@ int main(int argc, char** argv)
 
 					// Chance to revalidate object tracking quality
 					if (recheckChance >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
+						std::cout << "Rechecking tracking quality..." << std::endl;
 						goto detect;
 					}
 
@@ -449,20 +246,20 @@ int main(int argc, char** argv)
 					objY = roi.y + roi.height * 0.5;
 
 					// Inform child process's threads of old data
-					ShmPTR[2] = 0;
-					ShmPTR[3] = 0;
+					ShmPTRParent[2] = 0;
+					ShmPTRParent[3] = 0;
 
 					// Determine error
-					ShmPTR[0] = frameCenterY - objY;
-					ShmPTR[1] = frameCenterX - objX;
+					ShmPTRParent[0] = frameCenterY - objY;
+					ShmPTRParent[1] = frameCenterX - objX;
 
 					// Reset read flags
-					ShmPTR[5] = 0;
-					ShmPTR[6] = 0;
+					ShmPTRParent[5] = 0;
+					ShmPTRParent[6] = 0;
 
 					// Fresh data, now the child process's threads can read
-					ShmPTR[2] = 1;
-					ShmPTR[3] = 1;
+					ShmPTRParent[2] = 1;
+					ShmPTRParent[3] = 1;
 
 					// draw to frame
 					if (draw) {
@@ -506,20 +303,20 @@ int main(int argc, char** argv)
 						objY = result.targetCenterY;
 
 						// Inform child process's threads of old data
-						ShmPTR[2] = 0;
-						ShmPTR[3] = 0;
+						ShmPTRParent[2] = 0;
+						ShmPTRParent[3] = 0;
 
 						// Determine error
-						ShmPTR[0] = frameCenterY - objY;
-						ShmPTR[1] = frameCenterX - objX;
+						ShmPTRParent[0] = frameCenterY - objY;
+						ShmPTRParent[1] = frameCenterX - objX;
 
 						// Reset read flags
-						ShmPTR[5] = 0;
-						ShmPTR[6] = 0;
+						ShmPTRParent[5] = 0;
+						ShmPTRParent[6] = 0;
 
 						// Fresh data, now the child process's threads can read
-						ShmPTR[2] = 1;
-						ShmPTR[3] = 1;
+						ShmPTRParent[2] = 1;
+						ShmPTRParent[3] = 1;
 			
 						if (useTracking && !isTracking) {
 
@@ -531,8 +328,8 @@ int main(int argc, char** argv)
 							if (tracker->init(frame, roi)) {
 								isTracking = true;
 								std::cout << "initialized!!" << std::endl;
-								ShmPTR[3];
-								kill(pid, SIGUSR1);
+								std::cout << "Tracking Target..." << std::endl;
+								ShmPTRParent[4] = 1;
 							}
 						}
 					}
@@ -585,65 +382,353 @@ int main(int argc, char** argv)
 	// Child process
 	else {
 
-		prctl(PR_SET_PDEATHSIG, SIGKILL); // Kill child when parent dies
-		sendComand(0x8, 0x0, fd); // Reset servos
+		// Limit precision for calculations moving forward
+		// std::setprecision(4);
 
-		// Setup threads
-		PID pan = PID(0.05, 0.04, 0.001, -75.0, 75.0);
-		PID tilt = PID(0.05, 0.04, 0.001, -75.0, 75.0);
+		// Check for GPU
+		// auto cuda_available = torch::cuda::is_available();
+		// torch::Device device(cuda_available ? torch::kCUDA : torch::kCPU);
 
-		param* parameters = (param*)malloc(sizeof(param*));
+		// Create a memory pointer to char PID objects and 
 
-		parameters->fd = fd;
-		parameters->ShmPTR = ShmPTR;
-		parameters->pan = &pan;
-		parameters->tilt = &tilt;
-		parameters->rate = 30; /* Updates per second */
+		pid_t ppid = getpid();
+		pid_t pid2 = fork();
+		
+		// Parent process
+		if (pid2 > 0) {
 
-		pthread_t panTid, tiltTid;
-		pthread_create(&panTid, NULL, panThread, (void*)parameters);
-		pthread_create(&tiltTid, NULL, tiltThread, (void*)parameters);
-		pthread_detach(panTid);
-		pthread_detach(tiltTid);
-	
-		struct sigaction sig_action;
+			prctl(PR_SET_PDEATHSIG, SIGKILL); // Kill child when parent dies
 
-		sigset_t oldmask;
-		sigset_t newmask;
-		sigset_t zeromask;
+			sigset_t  mask;
+			siginfo_t info;
+			pid_t     child, p;
+			int       signum;
 
-		memset(&sig_action, 0, sizeof(struct sigaction));
+			sigemptyset(&mask);
+			sigaddset(&mask, SIGINT);
+			sigaddset(&mask, SIGHUP);
+			sigaddset(&mask, SIGTERM);
+			sigaddset(&mask, SIGQUIT);
+			sigaddset(&mask, SIGUSR1);
+			sigaddset(&mask, SIGUSR2);
+			if (sigprocmask(SIG_BLOCK, &mask, NULL) == -1) {
+				throw "Cannot block SIGUSR1 or SIGUSR2";
+			}
 
-		sig_action.sa_flags = SA_SIGINFO;
-		sig_action.sa_sigaction = usr_sig_handler1;
+			ShmPTRChild = (int*)shmat(ShmID, 0, 0);
 
-		sigaction(SIGHUP, &sig_action, NULL);
-		sigaction(SIGINT, &sig_action, NULL);
-		sigaction(SIGTERM, &sig_action, NULL);
-		sigaction(SIGSEGV, &sig_action, NULL);
-		sigaction(SIGUSR1, &sig_action, NULL);
+			if ((int)ShmPTRChild == -1) {
+				throw "Could not initialize shared memory";
+			}
 
-		sigemptyset(&newmask);
-		sigaddset(&newmask, SIGHUP);
-		sigaddset(&newmask, SIGINT);
-		sigaddset(&newmask, SIGTERM);
-		sigaddset(&newmask, SIGSEGV);
-		sigaddset(&newmask, SIGUSR1);
+			param* parameters = (param*)malloc(sizeof(param));
+			parameters->maxBufferSize = 256;
+			Buffer* trainingBuffer;
 
-		sigprocmask(SIG_BLOCK, &newmask, &oldmask);
-		sigemptyset(&zeromask);
-		sig_value1 = 0;
+			try {
+				// Shared memory for training buffers
+				boost::interprocess::shared_memory_object::remove("SharedTrainingBuffer");
+				boost::interprocess::managed_shared_memory segment(boost::interprocess::create_only, "SharedTrainingBuffer", sizeof(TD) * parameters->maxBufferSize * 2);
+				ShmemAllocator alloc_inst(segment.get_segment_manager());
+				trainingBuffer = segment.construct<Buffer>("Buffer") (alloc_inst);
+			}
+			catch (...) {
+				boost::interprocess::shared_memory_object::remove("SharedTrainingBuffer");
+				std::cout << "Error encountered in servo and PID process." << std::endl;
+				throw "Issue with shared memory object";
+			}
 
-		while ((sig_value1 != SIGINT) && (sig_value1 != SIGTERM))
-		{
+			sendComand(0x8, 0x0, fd); // Reset servos
+
+			// Setup shared thread parameters
+			PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
+			PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
+			PIDAutoTuner* model = new Model();
+
+			parameters->fd = fd;
+			parameters->ShmPTR = ShmPTRChild;
+			parameters->pan = pan;
+			parameters->tilt = tilt;
+			parameters->rate = 30; /* Updates per second */
+			parameters->model = model;
+			parameters->mutex = PTHREAD_MUTEX_INITIALIZER;
+			parameters->pid = pid2;
+			parameters->isTraining = false;
+
+			sleep(30);
+
+			pthread_t panTid, tiltTid, trainTid;
+			pthread_create(&panTid, NULL, panThread, (void*)parameters);
+			pthread_create(&tiltTid, NULL, tiltThread, (void*)parameters);
+			pthread_detach(panTid);
+			pthread_detach(tiltTid);
+
+			while (true) {
+
+				signum = sigwaitinfo(&mask, &info);
+				if (signum == -1) {
+					if (errno == EINTR)
+						continue;
+					throw "Parent process: sigwaitinfo() failed";	
+				}
+
+				// Process training data on received signal
+				if (signum == SIGUSR1 && info.si_pid == pid2) {
+					std::cout << "Received finished training data..." << std::endl;
+					if (trainingBuffer->empty()) {
+						std::cout << "Updated weights..." << std::endl;
+					}
+
+					parameters->isTraining = false;
+				}
+
+				// Break when on SIGINT
+				if (signum == SIGINT && !info.si_pid == pid2) {
+					std::cout << "Ctrl+C detected!" << std::endl;
+					break;
+				}
+			}
+
+			kill(-parent_pid, SIGQUIT);
+			if (wait(NULL) != -1) {
+				return 0;
+			}
+			else {
+				return -1;
+			}
+		}
+		else {
+
+			prctl(PR_SET_PDEATHSIG, SIGKILL); // Kill child when parent dies
+
+			sleep(1); // wait for parent to fully initialize
+			Buffer* trainingBuffer;
+			
+			// Retrieve the training buffer from shared memory
+			boost::interprocess::managed_shared_memory segment(boost::interprocess::open_only, "SharedTrainingBuffer");
+			trainingBuffer = segment.find<Buffer>("Buffer").first;
+			// Train the model
+			struct sigaction sig_action;
+
+			sigset_t oldmask;
+			sigset_t newmask;
+			sigset_t zeromask;
+
+			memset(&sig_action, 0, sizeof(struct sigaction));
+
+			sig_action.sa_flags = SA_SIGINFO;
+			sig_action.sa_sigaction = usr_sig_handler1;
+
+			sigaction(SIGHUP, &sig_action, NULL);
+			sigaction(SIGINT, &sig_action, NULL);
+			sigaction(SIGTERM, &sig_action, NULL);
+			sigaction(SIGSEGV, &sig_action, NULL);
+			sigaction(SIGUSR1, &sig_action, NULL);
+
+			sigemptyset(&newmask);
+			sigaddset(&newmask, SIGHUP);
+			sigaddset(&newmask, SIGINT);
+			sigaddset(&newmask, SIGTERM);
+			sigaddset(&newmask, SIGSEGV);
+			sigaddset(&newmask, SIGUSR1);
+
+			sigprocmask(SIG_BLOCK, &newmask, &oldmask);
+			sigemptyset(&zeromask);
 			sig_value1 = 0;
 
-			// Sleep until signal is caught
-			sigsuspend(&zeromask);
 
-			if (sig_value1 == SIGUSR1) {
-				std::cout << "Tracking reinitialized, resetting pid's..." << std::endl;
+			PIDAutoTuner model;
+			while ((sig_value1 != SIGINT) && (sig_value1 != SIGTERM))
+			{
+				sig_value1 = 0;
+
+				// Sleep until signal is caught; train model on waking
+				sigsuspend(&zeromask);
+
+				if (sig_value1 == SIGUSR1) {
+					std::cout << "Performing training session..." << std::endl;
+					sleep(2);
+					// Read in training session data
+					
+
+					// train on data
+					trainingBuffer->clear();
+					// send updated weights to parent
+					kill(getppid(), SIGUSR1);
+				}
 			}
 		}
 	}
+}
+
+void* panThread(void* args) {
+
+	boost::interprocess::managed_shared_memory segment(boost::interprocess::open_only, "SharedTrainingBuffer");
+	Buffer* trainingBuffer;
+	param* parameters = (param*)args;
+
+	PID* pan = parameters->pan;
+	int* ShmPTR = parameters->ShmPTR;
+	int milis = 1000 / parameters->rate;
+	int fd = parameters->fd;
+
+	pan->init();
+	int angleX;
+	int currentAngleX = 90;
+
+	trainingBuffer = segment.find<Buffer>("Buffer").first;
+
+	while (true) {
+
+
+		if (ShmPTR[4]) { // If the target is locked on
+			if (ShmPTR[3] && ShmPTR[6] != 1) { // If the we are ready to read and not already have read it
+				angleX = static_cast<int>(pan->update(static_cast<double>(ShmPTR[1]), 0));
+				ShmPTR[6] = 1;
+			}
+			else {
+				continue;
+			}
+		}
+		else {
+			pan->init();
+		}
+
+		/*std::cout << "X: ";
+		std::cout << angleX << std::endl;*/
+
+		if (currentAngleX != angleX) {
+			int mappedX = mapOutput(angleX, -90, 90, 0, 180);
+			sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
+			currentAngleX = angleX;
+		}
+
+		if (parameters->isTraining == false) {
+			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
+				// trainingBuffer = segment.find<Buffer>("Buffer").first;
+				if (parameters->isTraining == false) {
+					TD data;
+
+					try {
+						if (trainingBuffer->size() == 256) {
+							std::cout << "Sending a training request..." << std::endl;
+							parameters->isTraining = true;
+							kill(parameters->pid, SIGUSR1);
+						}
+						else {
+							std::cout << "Added to buffer" << std::endl;
+							trainingBuffer->push_back(data);
+						}
+					}
+					catch (...)
+					{
+						std::cout << "Error in pan thread" << std::endl;
+						throw;
+					}
+				}
+
+				pthread_mutex_unlock(&parameters->mutex);
+			}
+
+			pthread_mutex_unlock(&parameters->mutex);
+		}
+
+		msleep(milis);
+	}
+
+	return NULL;
+}
+
+void* tiltThread(void* args) {
+
+	boost::interprocess::managed_shared_memory segment(boost::interprocess::open_only, "SharedTrainingBuffer");
+	Buffer* trainingBuffer;
+
+	param* parameters = (param*)args;
+
+	PID* tilt = parameters->tilt;
+	int* ShmPTR = parameters->ShmPTR;
+	int milis = 1000 / parameters->rate;
+	int fd = parameters->fd;
+
+	tilt->init();
+	int angleY;
+	int currentAngleY = 90;
+	trainingBuffer = segment.find<Buffer>("Buffer").first;
+
+	while (true) {
+
+		if (ShmPTR[4]) { // If the target is locked on
+			if (ShmPTR[2] && ShmPTR[5] != 1) { // If we are ready to read
+				angleY = static_cast<int>(tilt->update(static_cast<double>(ShmPTR[0]), 0)) * -1;
+				ShmPTR[5] = 1;
+			}
+			else {
+				continue;
+			}
+
+			/*std::cout << "Y: ";
+			std::cout << angleY << std::endl;*/
+
+			if (currentAngleY != angleY) {
+
+				int mappedY = mapOutput(angleY, -90, 90, 0, 180);
+				sendComand(0x3, static_cast<unsigned char>(mappedY), fd);
+				currentAngleY = angleY;
+			}
+		}
+		else {
+			tilt->init();
+		}
+
+
+		if (parameters->isTraining == false) {
+			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
+				std::cout << "Here we are!!" << std::endl;
+				// trainingBuffer = segment.find<Buffer>("Buffer").first;
+
+				try {
+					if (parameters->isTraining == false) {
+						TD data;
+
+						if (trainingBuffer->size() == 256) {
+							std::cout << "Sending a training request..." << std::endl;
+							parameters->isTraining = true;
+							kill(parameters->pid, SIGUSR1);
+						}
+						else {
+							std::cout << "Added to buffer" << std::endl;
+							trainingBuffer->push_back(data);
+						}
+					}
+				}
+				catch (...)
+				{
+					std::cout << "Error in tilt thread" << std::endl;
+					throw;
+				}
+				
+
+				pthread_mutex_unlock(&parameters->mutex);
+			}
+
+			pthread_mutex_unlock(&parameters->mutex);
+		}
+		
+		msleep(milis);
+	}
+
+	return NULL;
+}
+
+static void usr_sig_handler1(const int sig_number, siginfo_t* sig_info, void* context)
+{
+	// Take care of all segfaults
+	if (sig_number == SIGSEGV)
+	{
+		perror("SIGSEV: Address access error.");
+		exit(-1);
+	}
+
+	sig_value1 = sig_number;
 }
