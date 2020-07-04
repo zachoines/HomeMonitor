@@ -48,7 +48,7 @@
 #include "CaffeDetector.h"
 #include "CascadeDetector.h"
 #include "PID.h"
-#include "Model.h"
+#include "QNetwork.h"
 #include "util.h"
 #include "data.h"
 

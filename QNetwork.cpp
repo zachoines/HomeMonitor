@@ -1,61 +1,76 @@
-﻿#include "Model.h"
+﻿#include "QNetwork.h"
 #include <bits/stdc++.h> 
 #include <iostream>
 #include <regex>
 #include <stack>
 #include <torch/torch.h>
 
-// build a neural network similar to how you would do it with Pytorch
-/*
-		INPUT: [u(n); u(n − 1); y(n); y(n − 1); C(n); C(n − 1); e(n)]
-			u(n) and u(n − 1) are reference inputs (desired trajectory)
-			y(n) and y(n − 1) are reference outputs (real trajectory)
-			C(n) and C(n − 1) are the control signals
-			e(n) is the position tracking error, input to PID
-		OUTPUT: [Kp; Ki; Kd]
-			These are the input gains of the PID
 
-
-		Error:
-			Sum(MSE(K_n - K_n-1))
-			Are goal is to minimize the gradient of our MSE error function with respect to our PID input gains. We want
-			to converge on stable gains given our current environment at each timestep.
-
-*/
-Model::Model()
+QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w, int learning_rate)
 {
+	this->num_inputs = num_inputs;
+	this->num_actions = num_actions;
+	this->hidden_size = hidden_size;
+	this->init_w = init_w;
+	this->learning_rate = learning_rate;
+
 	// construct and register your layers
-	in = register_module("in", torch::nn::Linear(7, 7));
-	h = register_module("h", torch::nn::Linear(7, 3));
-	out = register_module("out", torch::nn::Linear(3, 3));
+	linear1 = register_module("linear1", torch::nn::Linear(num_inputs, hidden_size));
+	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
+	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, num_actions));
 
 	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
+
+	auto p = this->named_parameters(false);
+	auto weights = p.find("weight");
+	auto biases = p.find("bias");
+
+	if (weights != nullptr) torch::nn::init::uniform_(*weights);
+	if (biases != nullptr) torch::nn::init::uniform_(*biases);
+}
+QNetwork::QNetwork()
+{
+	num_inputs = 7;
+	num_actions = 3;
+	hidden_size = 7;
+	init_w = 3e-3;
+	learning_rate = 1e-4;
+
+	// construct and register your layers
+	linear1 = register_module("linear1", torch::nn::Linear(num_inputs, hidden_size));
+	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
+	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, num_actions));
+
+	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
+
+	auto p = this->named_parameters(false);
+	auto weights = p.find("weight");
+	auto biases = p.find("bias");
+
+	if (weights != nullptr) torch::nn::init::uniform_(*weights);
+	if (biases != nullptr) torch::nn::init::uniform_(*biases);
 }
 
-Model::~Model()
+QNetwork::~QNetwork()
 {
 
-	// TODO:: Make sure params are saved to model file
+	// TODO:: Make sure params are saved to QNetwork file
 	delete optimizer;
 }
 
-torch::Tensor Model::forward(torch::Tensor X, torch::Tensor k)
+torch::Tensor QNetwork::forward(torch::Tensor state)
 {
+	torch::Tensor X;
 
-	// let's pass relu 
-	X = torch::relu(in->forward(X));
-	X = torch::relu(h->forward(X));
-	X = torch::sigmoid(out->forward(X));
+	X = torch::relu(linear1->forward(state));
+	X = torch::relu(linear2->forward(X));
+	X = linear3->forward(X);
 
-
-	// this->batches.push_back(X);
-
-	// return the output
 	return X;
 
 }
 
-void Model::save(std::stringstream stream)
+void QNetwork::save(std::stringstream stream)
 {
 
 	// auto params = this->named_parameters(true /*recurse*);
@@ -64,11 +79,11 @@ void Model::save(std::stringstream stream)
 
 }
 
-void Model::load()
+void QNetwork::load()
 {
 }
 
-void Model::train()
+void QNetwork::train()
 {
 	// Initialize running metrics
 	double running_loss = 0.0;
