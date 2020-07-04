@@ -76,8 +76,11 @@
     <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Model.cpp" />
+    <ClCompile Include="Normal.cpp" />
     <ClCompile Include="ObjectDetector.cpp" />
     <ClCompile Include="PID.cpp" />
+    <ClCompile Include="PolicyNetwork.cpp" />
+    <ClCompile Include="SACAgent.cpp" />
     <ClCompile Include="util.h" />
   </ItemGroup>
   <ItemGroup>
@@ -108,8 +111,11 @@
     <ClInclude Include="CascadeDetector.h" />
     <ClInclude Include="data.h" />
     <ClInclude Include="Model.h" />
+    <ClInclude Include="Normal.h" />
     <ClInclude Include="ObjectDetector.h" />
     <ClInclude Include="PID.h" />
+    <ClInclude Include="PolicyNetwork.h" />
+    <ClInclude Include="SACAgent.h" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />

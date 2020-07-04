@@ -16,6 +16,9 @@
     </ClCompile>
     <ClCompile Include="Model.cpp" />
     <ClCompile Include="util.h" />
+    <ClCompile Include="PolicyNetwork.cpp" />
+    <ClCompile Include="Normal.cpp" />
+    <ClCompile Include="SACAgent.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="readme.md">
@@ -49,6 +52,9 @@
     </ClInclude>
     <ClInclude Include="Model.h" />
     <ClInclude Include="data.h" />
+    <ClInclude Include="PolicyNetwork.h" />
+    <ClInclude Include="Normal.h" />
+    <ClInclude Include="SACAgent.h" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />

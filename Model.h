@@ -16,7 +16,7 @@ public:
 
 	torch::Tensor forward(torch::Tensor X, torch::Tensor k);
 
-	void save();
+	void save(std::stringstream stream);
 	void load();
 	void train();
 

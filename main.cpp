@@ -78,8 +78,7 @@ int main(int argc, char** argv)
 
 	int fd = wiringPiI2CSetup(ARDUINO_ADDRESS);
 	if (fd == -1) {
-		std::cout << "Failed to init I2C communication.\n";
-		return -1;
+		throw "Failed to init I2C communication.";
 	}
 
 	// Init shared memory
@@ -120,8 +119,8 @@ int main(int argc, char** argv)
 		// user hyperparams
 		float recheckChance = 0.01;
 		bool useTracking = true;
-		bool draw = true;
-		bool showVideo = true;
+		bool draw = false;
+		bool showVideo = false;
 		std::string target = "person";
 
 		// program state variables
@@ -443,14 +442,14 @@ int main(int argc, char** argv)
 			// Setup shared thread parameters
 			PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
 			PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
-			PIDAutoTuner* model = new Model();
+			// PIDAutoTuner* model = new Model();
 
 			parameters->fd = fd;
 			parameters->ShmPTR = ShmPTRChild;
 			parameters->pan = pan;
 			parameters->tilt = tilt;
 			parameters->rate = 30; /* Updates per second */
-			parameters->model = model;
+			// parameters->model = model;
 			parameters->mutex = PTHREAD_MUTEX_INITIALIZER;
 			parameters->pid = pid2;
 			parameters->isTraining = false;
@@ -537,7 +536,7 @@ int main(int argc, char** argv)
 			sig_value1 = 0;
 
 
-			PIDAutoTuner model;
+			// PIDAutoTuner model;
 			while ((sig_value1 != SIGINT) && (sig_value1 != SIGTERM))
 			{
 				sig_value1 = 0;
@@ -579,11 +578,19 @@ void* panThread(void* args) {
 	trainingBuffer = segment.find<Buffer>("Buffer").first;
 
 	while (true) {
-
+		TD data;
 
 		if (ShmPTR[4]) { // If the target is locked on
 			if (ShmPTR[3] && ShmPTR[6] != 1) { // If the we are ready to read and not already have read it
-				angleX = static_cast<int>(pan->update(static_cast<double>(ShmPTR[1]), 0));
+				data.ref_input_1;
+				data.ref_input_2;
+				data.ref_output_1;
+				data.ref_output_2;
+				data.control_sig_1;
+				data.control_sig_2;
+				data.error = static_cast<double>(ShmPTR[1]);
+				
+				angleX = static_cast<int>(pan->update(data.error, 0));
 				ShmPTR[6] = 1;
 			}
 			else {
@@ -607,16 +614,16 @@ void* panThread(void* args) {
 			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
 				// trainingBuffer = segment.find<Buffer>("Buffer").first;
 				if (parameters->isTraining == false) {
-					TD data;
+					
+					
 
 					try {
-						if (trainingBuffer->size() == 256) {
+						if (trainingBuffer->size() == parameters->maxBufferSize) {
 							std::cout << "Sending a training request..." << std::endl;
 							parameters->isTraining = true;
 							kill(parameters->pid, SIGUSR1);
 						}
 						else {
-							std::cout << "Added to buffer" << std::endl;
 							trainingBuffer->push_back(data);
 						}
 					}
@@ -691,13 +698,12 @@ void* tiltThread(void* args) {
 					if (parameters->isTraining == false) {
 						TD data;
 
-						if (trainingBuffer->size() == 256) {
+						if (trainingBuffer->size() == parameters->maxBufferSize) {
 							std::cout << "Sending a training request..." << std::endl;
 							parameters->isTraining = true;
 							kill(parameters->pid, SIGUSR1);
 						}
 						else {
-							std::cout << "Added to buffer" << std::endl;
 							trainingBuffer->push_back(data);
 						}
 					}

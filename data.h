@@ -11,7 +11,12 @@
 
 
 struct TrainData {
-	double outputGains[3];
+	double ref_input_1;
+	double ref_input_2;
+	double ref_output_1;
+	double ref_output_2;
+	double control_sig_1;
+	double control_sig_2;
 	double error;
 } typedef TD;
 
