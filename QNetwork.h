@@ -17,9 +17,4 @@ public:
 
 	torch::Tensor forward(torch::Tensor state);
 
-	void save_to(std::stringstream& stream);
-	void load_from(std::stringstream& stream);
-	void save_to(const std::string& file_name);
-	void load_from(const std::string& file_name);
-
 } typedef QN;

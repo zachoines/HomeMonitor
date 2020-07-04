@@ -4,7 +4,7 @@
 #include <torch/torch.h>
 
 
-QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w = 3e-3, int learning_rate = 1e-4)
+QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w, int learning_rate)
 {
 	this->num_inputs = num_inputs;
 	this->num_actions = num_actions;
@@ -29,8 +29,6 @@ QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w 
 
 QNetwork::~QNetwork()
 {
-
-	// TODO:: Make sure params are saved to QNetwork file
 	delete optimizer;
 }
 
@@ -46,23 +44,6 @@ torch::Tensor QNetwork::forward(torch::Tensor state)
 
 }
 
-void QNetwork::save_to(std::stringstream& stream)
-{
-	 torch::save(this, stream);
-}
-
-void QNetwork::load_from(std::stringstream& stream)
-{
-	torch::load(this, stream);
-}
-
-void QNetwork::save_to(const std::string& file_name) {
-	torch::save(this, file_name);
-}
-
-void QNetwork::load_from(const std::string& file_name) {
-	torch::load(this, file_name);
-}
 
 
 

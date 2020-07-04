@@ -6,7 +6,7 @@
 #include <torch/torch.h>
 #include "Normal.h"
 
-PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, int init_w = 3e-3, int log_std_min = -20, int log_std_max = 2) {
+PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, int init_w, int log_std_min, int log_std_max) {
 	this->num_inputs = num_inputs;
 	this->num_actions = num_actions;
 	this->hidden_size = hidden_size;
@@ -32,8 +32,6 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, i
 }
 
 PolicyNetwork::~PolicyNetwork() {
-
-	// TODO:: Make sure params are saved to PolicyNetwork file
 	delete optimizer;
 }
 
@@ -49,14 +47,14 @@ at::TensorList PolicyNetwork::forward(torch::Tensor state) {
 	return { mean, log_std };
 }
 
-at::TensorList PolicyNetwork::sample(torch::Tensor state, double epsilon = 1e-6) {
+at::TensorList PolicyNetwork::sample(torch::Tensor state, double epsilon) {
 	torch::Tensor X, mean, log_std, std, z, action, log_prob, log_pi;
 
 	at::TensorList result = this->forward(state);
 	mean = result[0];
 	log_std = result[1];
 	std = torch::exp(log_std);
-	Normal::Normal normal = Normal(mean, std);
+	Normal normal = Normal(mean, std);
 	z = normal.sample();
 	action = torch::tanh(z);
 
@@ -64,23 +62,4 @@ at::TensorList PolicyNetwork::sample(torch::Tensor state, double epsilon = 1e-6)
 	log_pi = log_pi.sum(1, true);
 
 	return { action, log_pi };
-}
-
-
-void PolicyNetwork::save_to(std::stringstream& stream)
-{
-	torch::save(this, stream);
-}
-
-void PolicyNetwork::load_from(std::stringstream& stream)
-{
-	torch::load(this, stream);
-}
-
-void PolicyNetwork::save_to(const std::string& file_name) {
-	torch::save(this, file_name);
-}
-
-void PolicyNetwork::load_from(const std::string& file_name) {
-	torch::load(this, file_name);
 }

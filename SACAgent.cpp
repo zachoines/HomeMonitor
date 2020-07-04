@@ -1,6 +1,8 @@
 ﻿#include "SACAgent.h"
 #include <bits/stdc++.h> 
 #include <iostream>
+#include <torch/script.h>
+#include <torch/torch.h>
 #include "PolicyNetwork.h"
 #include "QNetwork.h"
 #include "Normal.h"
@@ -25,7 +27,7 @@
 
 */
 
-SACAgent::SACAgent(int num_inputs, int num_actions, double action_max, double action_min, double gamma = 0.99, double tau = 0.01, double alpha = 0.2, double q_lr = 3e-4, double p_lr = 3e-4, double a_lr = 3e-4)
+SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max, double action_min, double gamma, double tau, double alpha, double q_lr, double p_lr, double a_lr)
 {
 	_num_inputs = num_inputs;
 	_num_actions = num_actions;
@@ -40,32 +42,23 @@ SACAgent::SACAgent(int num_inputs, int num_actions, double action_max, double ac
 	_p_lr = p_lr;
 
 	// initialize networks
-	_q_net1 = new QNetwork::QNetwork(num_inputs, num_actions, 7);
-	_q_net2 = new QNetwork::QNetwork(num_inputs, num_actions, 7);
-	_target_q_net1 = new QNetwork::QNetwork(num_inputs, num_actions, 7);
-	_target_q_net2 = new QNetwork::QNetwork(num_inputs, num_actions, 7);
-	_policy_net = new PolicyNetwork::PolicyNetwork(num_inputs, num_actions, 7);
+	_q_net1 = new QNetwork(num_inputs, num_actions, num_hidden);
+	_q_net2 = new QNetwork(num_inputs, num_actions, num_hidden);
+	_target_q_net1 = new QNetwork(num_inputs, num_actions, num_hidden);
+	_target_q_net2 = new QNetwork(num_inputs, num_actions, num_hidden);
+	_policy_net = new PolicyNetwork(num_inputs, num_actions, num_hidden);
 
-	// Load from file if exists
-	std::string path = get_current_dir_name();
-	std::string QModelFile1 = "/Q_Net_Checkpoint1.pt";
-	std::string QModelFile2 = "/Q_Net_Checkpoint2.pt";
-	std::string PModelFile = "/P_Net_Checkpoint.pt";
-
-	if (Utility::fileExists(QModelFile1) && Utility::fileExists(QModelFile2) && Utility::fileExists(PModelFile)) {
-		_q_net1->load_from(QModelFile1);
-		_q_net2->load_from(QModelFile2);
-		_policy_net->load_from(PModelFile);
-	}
-
+	// Load last checkpoint if available
+	load_checkpoint();
+	
 	// Copy over params
 	std::stringstream stream1;
-	_q_net1->save_to(stream1);
-	_target_q_net1->load_from(stream1);
+	save_to(*_q_net1, stream1);
+	load_from(*_target_q_net1, stream1);
 
 	std::stringstream stream2;
-	_q_net2->save_to(stream2);
-	_target_q_net2->load_from(stream2);
+	save_to(*_q_net2, stream2);
+	load_from(*_target_q_net2, stream2);
 
 	// Auto Entropy adjustment variables
 	_target_entropy = c10::Scalar(-1 * num_actions);
@@ -76,12 +69,86 @@ SACAgent::SACAgent(int num_inputs, int num_actions, double action_max, double ac
 }
 
 SACAgent::~SACAgent() {
+
 	delete _q_net1;
 	delete _q_net2;
 	delete _target_q_net1;
 	delete _target_q_net2;
 	delete _policy_net;
 	delete _alpha_optimizer;
+}
+
+void SACAgent::save_to(torch::nn::Module& module, std::stringstream& fd) {
+	torch::serialize::OutputArchive archive;
+	auto params = module.named_parameters(true /*recurse*/);
+	auto buffers = module.named_buffers(true /*recurse*/);
+	for (const auto& val : params) {
+		archive.write(val.key(), val.value());
+	}
+	for (const auto& val : buffers) {
+		archive.write(val.key(), val.value(), /*is_buffer*/ true);
+	}
+
+	archive.save_to(fd);
+}
+
+void SACAgent::load_from(torch::nn::Module& module, std::stringstream& fd) {
+	torch::serialize::InputArchive archive;
+	archive.load_from(fd);
+	torch::NoGradGuard no_grad;
+	std::smatch m;
+	auto params = module.named_parameters(true);
+	auto buffers = module.named_buffers(true);
+	for (auto& val : params) {
+		archive.read(val.key(), val.value());
+	}
+	for (auto& val : buffers) {
+		archive.read(val.key(), val.value(), true);
+	}
+}
+
+void SACAgent::save_checkpoint()
+{
+	// Load from file if exists
+	std::string path = get_current_dir_name();
+	std::string QModelFile1 = "/Q_Net_Checkpoint1.pt";
+	std::string QModelFile2 = "/Q_Net_Checkpoint2.pt";
+	std::string PModelFile = "/P_Net_Checkpoint.pt";
+
+	torch::serialize::OutputArchive QModelArchive1;
+	QModelArchive1.save_to(QModelFile1);
+	_q_net1->save(QModelArchive1);
+
+	torch::serialize::OutputArchive QModelArchive2;
+	QModelArchive2.save_to(QModelFile2);
+	_q_net2->save(QModelArchive2);
+
+	torch::serialize::OutputArchive PModelArchive1;
+	PModelArchive1.save_to(PModelFile);
+	_policy_net->save(PModelArchive1);
+}
+
+void SACAgent::load_checkpoint()
+{
+	// Load from file if exists
+	std::string path = get_current_dir_name();
+	std::string QModelFile1 = "/Q_Net_Checkpoint1.pt";
+	std::string QModelFile2 = "/Q_Net_Checkpoint2.pt";
+	std::string PModelFile = "/P_Net_Checkpoint.pt";
+
+	if (Utility::fileExists(QModelFile1) && Utility::fileExists(QModelFile2) && Utility::fileExists(PModelFile)) {
+		torch::serialize::InputArchive QModelArchive1;
+		QModelArchive1.load_from(QModelFile1);
+		_q_net1->load(QModelArchive1);
+
+		torch::serialize::InputArchive QModelArchive2;
+		QModelArchive2.load_from(QModelFile2);
+		_q_net2->load(QModelArchive2);
+
+		torch::serialize::InputArchive PModelArchive1;
+		PModelArchive1.load_from(PModelFile);
+		_policy_net->load(PModelArchive1);
+	}
 }
 
 torch::Tensor SACAgent::get_action(torch::Tensor state)
@@ -92,7 +159,7 @@ torch::Tensor SACAgent::get_action(torch::Tensor state)
 	at::Tensor log_std = results[1];
 	at::Tensor std = log_std.exp();
 
-	Normal::Normal normal = Normal(mean, std);
+	Normal normal = Normal(mean, std);
 	torch::Tensor z = normal.sample();
 	z.set_requires_grad(false);
 	torch::Tensor actions = torch::tanh(z);
@@ -108,36 +175,3 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 {
 
 }
-
-//void getStateDict() {
-//
-//}
-
-//void SaveStateDict(const torch::nn::Module& module, const std::string& file_name) {
-//	torch::serialize::OutputArchive archive;
-//	auto params = module.named_parameters(true /*recurse*/);
-//	auto buffers = module.named_buffers(true /*recurse*/);
-//	for (const auto& val : params) {
-//		archive.write(val.key(), val.value());
-//	}
-//	for (const auto& val : buffers) {
-//		archive.write(val.key(), val.value(), /*is_buffer*/ true);
-//	}
-//
-//	archive.save_to(file_name);
-//}
-//
-//void LoadStateDict(torch::nn::Module& module, const std::string& file_name) {
-//	torch::serialize::InputArchive archive;
-//	archive.load_from(file_name);
-//	torch::NoGradGuard no_grad;
-//	std::smatch m;
-//	auto params = module.named_parameters(true);
-//	auto buffers = module.named_buffers(true);
-//	for (auto& val : params) {
-//		archive.read(val.key(), val.value());
-//	}
-//	for (auto& val : buffers) {
-//		archive.read(val.key(), val.value(), true);
-//	}
-//}

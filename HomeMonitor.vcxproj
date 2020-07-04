@@ -75,7 +75,7 @@
     <ClCompile Include="CaffeDetector.cpp" />
     <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="Model.cpp" />
+    <ClCompile Include="QNetwork.cpp" />
     <ClCompile Include="Normal.cpp" />
     <ClCompile Include="ObjectDetector.cpp" />
     <ClCompile Include="PID.cpp" />
@@ -110,7 +110,7 @@
     <ClInclude Include="CaffeDetector.h" />
     <ClInclude Include="CascadeDetector.h" />
     <ClInclude Include="data.h" />
-    <ClInclude Include="Model.h" />
+    <ClInclude Include="QNetwork.h" />
     <ClInclude Include="Normal.h" />
     <ClInclude Include="ObjectDetector.h" />
     <ClInclude Include="PID.h" />
