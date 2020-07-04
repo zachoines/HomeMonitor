@@ -20,6 +20,8 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, i
 	mean_Linear = register_module("mean_Linear", torch::nn::Linear(hidden_size, num_actions));
 	log_std_linear = register_module("log_std_linear", torch::nn::Linear(hidden_size, num_actions));
 
+	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
+
 	// Initialize params
 	auto p = this->named_parameters(false);
 	auto weights = p.find("weight");
@@ -27,6 +29,12 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, i
 
 	if (weights != nullptr) torch::nn::init::uniform_(*weights);
 	if (biases != nullptr) torch::nn::init::uniform_(*biases);
+}
+
+PolicyNetwork::~PolicyNetwork() {
+
+	// TODO:: Make sure params are saved to PolicyNetwork file
+	delete optimizer;
 }
 
 at::TensorList PolicyNetwork::forward(torch::Tensor state) {
@@ -49,11 +57,30 @@ at::TensorList PolicyNetwork::sample(torch::Tensor state, double epsilon = 1e-6)
 	log_std = result[1];
 	std = torch::exp(log_std);
 	Normal::Normal normal = Normal(mean, std);
-	z = normal.rsample({num_actions});
+	z = normal.sample();
 	action = torch::tanh(z);
 
 	log_pi = normal.log_prob(z) - torch::log(1 - action.pow(2) + epsilon);
 	log_pi = log_pi.sum(1, true);
 
 	return { action, log_pi };
+}
+
+
+void PolicyNetwork::save_to(std::stringstream& stream)
+{
+	torch::save(this, stream);
+}
+
+void PolicyNetwork::load_from(std::stringstream& stream)
+{
+	torch::load(this, stream);
+}
+
+void PolicyNetwork::save_to(const std::string& file_name) {
+	torch::save(this, file_name);
+}
+
+void PolicyNetwork::load_from(const std::string& file_name) {
+	torch::load(this, file_name);
 }
