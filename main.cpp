@@ -29,6 +29,8 @@
 #include <boost/interprocess/managed_shared_memory.hpp>
 #include <boost/interprocess/containers/vector.hpp>
 #include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/interprocess/sync/interprocess_condition.hpp>
 #include <algorithm>
 
 // OpenCV imports
@@ -83,11 +85,11 @@ int main(int argc, char** argv)
 
 	// Init shared memory
 	int ShmID;
-	int* ShmPTRParent;
-	int* ShmPTRChild;
+	ED* ShmPTRParent;
+	ED* ShmPTRChild;
 	int status;
 
-	ShmID = shmget(IPC_PRIVATE, 7 * sizeof(int), IPC_CREAT | 0666);
+	ShmID = shmget(IPC_PRIVATE, 2 * sizeof(ED), IPC_CREAT | 0666);
 
 	if (ShmID < 0) {
 		throw "Could not initialize shared memory";
@@ -99,22 +101,11 @@ int main(int argc, char** argv)
 	// Parent process
 	if (pid > 0) {
 
-		ShmPTRParent = (int*)shmat(ShmID, 0, 0);
+		ShmPTRParent = (eventData*)shmat(ShmID, 0, 0);
 
 		if ((int)ShmPTRParent == -1) {
 			throw "Could not initialize shared memory";
 		}
-
-		// These values allow for async communication between parent process and child process's threads
-		// These garentee, in a non-blocking way, the child process will never read a value twice.
-		// But the child's threads may be reading old values at any given time.
-		ShmPTRParent[0] = 0; // Tilt error
-		ShmPTRParent[1] = 0; // Pan error
-		ShmPTRParent[2] = 1; // Tilt lock
-		ShmPTRParent[3] = 1; // Pan lock
-		ShmPTRParent[4] = 1; // Reset signal
-		ShmPTRParent[5] = 0; // Tilt read
-		ShmPTRParent[6] = 0; // Pan read
 
 		// user hyperparams
 		float recheckChance = 0.01;
@@ -159,6 +150,7 @@ int main(int argc, char** argv)
 		cv::Mat frame;
 		cv::Mat detection;
 		chrono::steady_clock::time_point Tbegin, Tend;
+		auto execbegin = std::chrono::high_resolution_clock::now();
 
 		cv::VideoCapture camera(0);
 		if (!camera.isOpened())
@@ -225,7 +217,7 @@ int main(int argc, char** argv)
 					// Get the new tracking result
 					if (!tracker->update(frame, roi)) {
 						isTracking = false;
-						std::cout << "Lost target!!" << std::endl;
+						std::cout << "Lost target!!" << std::endl; 
 						lossCount++;
 						goto detect;
 					}
@@ -237,28 +229,36 @@ int main(int argc, char** argv)
 					}
 
 				validated:
-
+					ED tilt;
+					ED pan;
 					// Determine object and frame centers
 					frameCenterX = static_cast<int>(frame.cols / 2);
 					frameCenterY = static_cast<int>(frame.rows / 2);
 					objX = roi.x + roi.width * 0.5;
 					objY = roi.y + roi.height * 0.5;
 
-					// Inform child process's threads of old data
-					ShmPTRParent[2] = 0;
-					ShmPTRParent[3] = 0;
+					// Inform child process's threads of old data (race condition here, kinda washes out in end)
+					ShmPTRParent[0].dirty = true;
+					ShmPTRParent[1].dirty = true;
 
 					// Determine error
-					ShmPTRParent[0] = frameCenterY - objY;
-					ShmPTRParent[1] = frameCenterX - objX;
-
-					// Reset read flags
-					ShmPTRParent[5] = 0;
-					ShmPTRParent[6] = 0;
+					tilt.error = static_cast<double>(frameCenterY - objY);
+					pan.error = static_cast<double>(frameCenterX - objX);
+		
+					// Enter State data
+					double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
+					pan.timestamp = elapsed;
+					tilt.timestamp = elapsed;
+					pan.Obj = objX;
+					tilt.Obj = objY;
+					pan.Frame = frameCenterY;
+					tilt.Frame = frameCenterX;
+					pan.done = false;
+					tilt.done = false;
 
 					// Fresh data, now the child process's threads can read
-					ShmPTRParent[2] = 1;
-					ShmPTRParent[3] = 1;
+					ShmPTRParent[0] = tilt;
+					ShmPTRParent[1] = pan;
 
 					// draw to frame
 					if (draw) {
@@ -301,21 +301,36 @@ int main(int argc, char** argv)
 						objX = result.targetCenterX;
 						objY = result.targetCenterY;
 
-						// Inform child process's threads of old data
-						ShmPTRParent[2] = 0;
-						ShmPTRParent[3] = 0;
+						ED tilt;
+						ED pan;
+						// Determine object and frame centers
+						frameCenterX = static_cast<int>(frame.cols / 2);
+						frameCenterY = static_cast<int>(frame.rows / 2);
+						objX = roi.x + roi.width * 0.5;
+						objY = roi.y + roi.height * 0.5;
+
+						// Inform child process's threads of old data (race condition here, kinda washes out in end)
+						ShmPTRParent[0].dirty = true;
+						ShmPTRParent[1].dirty = true;
 
 						// Determine error
-						ShmPTRParent[0] = frameCenterY - objY;
-						ShmPTRParent[1] = frameCenterX - objX;
+						tilt.error = static_cast<double>(frameCenterY - objY);
+						pan.error = static_cast<double>(frameCenterX - objX);
 
-						// Reset read flags
-						ShmPTRParent[5] = 0;
-						ShmPTRParent[6] = 0;
+						// Enter State data
+						double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
+						pan.timestamp = elapsed;
+						tilt.timestamp = elapsed;
+						pan.Obj = objX;
+						tilt.Obj = objY;
+						pan.Frame = frameCenterY;
+						tilt.Frame = frameCenterX;
+						pan.done = true;
+						tilt.done = true;
 
 						// Fresh data, now the child process's threads can read
-						ShmPTRParent[2] = 1;
-						ShmPTRParent[3] = 1;
+						ShmPTRParent[0] = tilt;
+						ShmPTRParent[1] = pan;
 			
 						if (useTracking && !isTracking) {
 
@@ -328,7 +343,6 @@ int main(int argc, char** argv)
 								isTracking = true;
 								std::cout << "initialized!!" << std::endl;
 								std::cout << "Tracking Target..." << std::endl;
-								ShmPTRParent[4] = 1;
 							}
 						}
 					}
@@ -381,13 +395,6 @@ int main(int argc, char** argv)
 	// Child process
 	else {
 
-		// Limit precision for calculations moving forward
-		// std::setprecision(4);
-
-		// Check for GPU
-		// auto cuda_available = torch::cuda::is_available();
-		// torch::Device device(cuda_available ? torch::kCUDA : torch::kCPU);
-
 		// Create a memory pointer to char PID objects and 
 
 		pid_t ppid = getpid();
@@ -414,7 +421,7 @@ int main(int argc, char** argv)
 				throw "Cannot block SIGUSR1 or SIGUSR2";
 			}
 
-			ShmPTRChild = (int*)shmat(ShmID, 0, 0);
+			ShmPTRChild = (ED*)shmat(ShmID, 0, 0);
 
 			if ((int)ShmPTRChild == -1) {
 				throw "Could not initialize shared memory";
@@ -442,19 +449,15 @@ int main(int argc, char** argv)
 			// Setup shared thread parameters
 			PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
 			PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
-			// PIDAutoTuner* model = new Model();
 
 			parameters->fd = fd;
 			parameters->ShmPTR = ShmPTRChild;
 			parameters->pan = pan;
 			parameters->tilt = tilt;
 			parameters->rate = 30; /* Updates per second */
-			// parameters->model = model;
 			parameters->mutex = PTHREAD_MUTEX_INITIALIZER;
 			parameters->pid = pid2;
 			parameters->isTraining = false;
-
-			sleep(30);
 
 			pthread_t panTid, tiltTid, trainTid;
 			pthread_create(&panTid, NULL, panThread, (void*)parameters);
@@ -498,6 +501,10 @@ int main(int argc, char** argv)
 		}
 		else {
 
+			// Check for GPU
+			auto cuda_available = torch::cuda::is_available();
+			torch::Device device(cuda_available ? torch::kCUDA : torch::kCPU);
+
 			prctl(PR_SET_PDEATHSIG, SIGKILL); // Kill child when parent dies
 
 			sleep(1); // wait for parent to fully initialize
@@ -535,8 +542,6 @@ int main(int argc, char** argv)
 			sigemptyset(&zeromask);
 			sig_value1 = 0;
 
-
-			// PIDAutoTuner model;
 			while ((sig_value1 != SIGINT) && (sig_value1 != SIGTERM))
 			{
 				sig_value1 = 0;
@@ -567,56 +572,64 @@ void* panThread(void* args) {
 	param* parameters = (param*)args;
 
 	PID* pan = parameters->pan;
-	int* ShmPTR = parameters->ShmPTR;
+	ED* ShmPTR = parameters->ShmPTR;
 	int milis = 1000 / parameters->rate;
 	int fd = parameters->fd;
-
-	pan->init();
 	int angleX;
 	int currentAngleX = 90;
+	bool programStart = true;
+	double lastTimeStep;
+	SD lastState;
 
 	trainingBuffer = segment.find<Buffer>("Buffer").first;
-
+	pan->init();
+	
+	
 	while (true) {
-		TD data;
+		SD currentState;
+		TD trainData;
+		ED panData = ShmPTR[1];
 
-		if (ShmPTR[4]) { // If the target is locked on
-			if (ShmPTR[3] && ShmPTR[6] != 1) { // If the we are ready to read and not already have read it
-				data.ref_input_1;
-				data.ref_input_2;
-				data.ref_output_1;
-				data.ref_output_2;
-				data.control_sig_1;
-				data.control_sig_2;
-				data.error = static_cast<double>(ShmPTR[1]);
-				
-				angleX = static_cast<int>(pan->update(data.error, 0));
-				ShmPTR[6] = 1;
+		if (!panData.dirty && !panData.isOld(lastTimeStep)) { // If its not old and not already read
+			
+			lastTimeStep = panData.timestamp;
+			angleX = static_cast<int>(pan->update(panData.error, 0));
+			currentState.Obj = panData.Obj;
+			currentState.Frame = panData.Frame;
+			currentState.Angle = panData.Angle;
+			currentState.error = panData.error;
+			trainData.done = panData.done;
+			trainData.reward = panData.error;
+			pan->getWeights(trainData.actions);
+
+			if (currentAngleX != angleX) {
+				int mappedX = mapOutput(angleX, -90, 90, 0, 180);
+				sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
+				currentAngleX = angleX;
+			}
+
+			if (programStart) { // For when we dont have a lastState
+				programStart = false;
+				lastState = currentState;
+				goto sleep;
 			}
 			else {
-				continue;
-			}
+				trainData.nextState = currentState;
+				trainData.currentState = lastState;
+				lastState = currentState;
+			}				
 		}
 		else {
-			pan->init();
-		}
-
-		/*std::cout << "X: ";
-		std::cout << angleX << std::endl;*/
-
-		if (currentAngleX != angleX) {
-			int mappedX = mapOutput(angleX, -90, 90, 0, 180);
-			sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
-			currentAngleX = angleX;
+			pan->update(0.0, 0);
+			goto sleep;
 		}
 
 		if (parameters->isTraining == false) {
+			
 			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
-				// trainingBuffer = segment.find<Buffer>("Buffer").first;
+				
 				if (parameters->isTraining == false) {
 					
-					
-
 					try {
 						if (trainingBuffer->size() == parameters->maxBufferSize) {
 							std::cout << "Sending a training request..." << std::endl;
@@ -624,13 +637,12 @@ void* panThread(void* args) {
 							kill(parameters->pid, SIGUSR1);
 						}
 						else {
-							trainingBuffer->push_back(data);
+							trainingBuffer->push_back(trainData);
 						}
 					}
 					catch (...)
 					{
-						std::cout << "Error in pan thread" << std::endl;
-						throw;
+						throw "Error in pan thread";
 					}
 				}
 
@@ -640,6 +652,7 @@ void* panThread(void* args) {
 			pthread_mutex_unlock(&parameters->mutex);
 		}
 
+	sleep:
 		msleep(milis);
 	}
 
@@ -654,73 +667,86 @@ void* tiltThread(void* args) {
 	param* parameters = (param*)args;
 
 	PID* tilt = parameters->tilt;
-	int* ShmPTR = parameters->ShmPTR;
+	ED* ShmPTR = parameters->ShmPTR;
 	int milis = 1000 / parameters->rate;
 	int fd = parameters->fd;
-
-	tilt->init();
+	bool programStart = true;
 	int angleY;
 	int currentAngleY = 90;
+	double lastTimeStep;
+	SD lastState;
+
+	tilt->init();
 	trainingBuffer = segment.find<Buffer>("Buffer").first;
 
 	while (true) {
+		SD currentState;
+		TD trainData;
+		ED tiltData = ShmPTR[0];
 
-		if (ShmPTR[4]) { // If the target is locked on
-			if (ShmPTR[2] && ShmPTR[5] != 1) { // If we are ready to read
-				angleY = static_cast<int>(tilt->update(static_cast<double>(ShmPTR[0]), 0)) * -1;
-				ShmPTR[5] = 1;
-			}
-			else {
-				continue;
-			}
+		if (!tiltData.dirty && !tiltData.isOld(lastTimeStep)) { // If its not old and not already read
 
-			/*std::cout << "Y: ";
-			std::cout << angleY << std::endl;*/
+			lastTimeStep = tiltData.timestamp;
+			angleY = static_cast<int>(tilt->update(tiltData.error, 0));
+			currentState.Obj = tiltData.Obj;
+			currentState.Frame = tiltData.Frame;
+			currentState.Angle = tiltData.Angle;
+			currentState.error = tiltData.error;
+			trainData.done = tiltData.done;
+			trainData.reward = tiltData.error;
+			tilt->getWeights(trainData.actions);
 
 			if (currentAngleY != angleY) {
-
 				int mappedY = mapOutput(angleY, -90, 90, 0, 180);
 				sendComand(0x3, static_cast<unsigned char>(mappedY), fd);
 				currentAngleY = angleY;
 			}
+
+			if (programStart) { // For when we dont have a lastState
+				programStart = false;
+				lastState = currentState;
+				goto sleep;
+			}
+			else {
+				trainData.nextState = currentState;
+				trainData.currentState = lastState;
+				lastState = currentState;
+			}
 		}
 		else {
-			tilt->init();
+			tilt->update(0.0, 0);
+			goto sleep;
 		}
 
-
 		if (parameters->isTraining == false) {
+
 			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
-				std::cout << "Here we are!!" << std::endl;
-				// trainingBuffer = segment.find<Buffer>("Buffer").first;
 
-				try {
-					if (parameters->isTraining == false) {
-						TD data;
+				if (parameters->isTraining == false) {
 
+					try {
 						if (trainingBuffer->size() == parameters->maxBufferSize) {
 							std::cout << "Sending a training request..." << std::endl;
 							parameters->isTraining = true;
 							kill(parameters->pid, SIGUSR1);
 						}
 						else {
-							trainingBuffer->push_back(data);
+							trainingBuffer->push_back(trainData);
 						}
 					}
+					catch (...)
+					{
+						throw "Error in tilt thread";
+					}
 				}
-				catch (...)
-				{
-					std::cout << "Error in tilt thread" << std::endl;
-					throw;
-				}
-				
 
 				pthread_mutex_unlock(&parameters->mutex);
 			}
 
 			pthread_mutex_unlock(&parameters->mutex);
 		}
-		
+
+	sleep:
 		msleep(milis);
 	}
 

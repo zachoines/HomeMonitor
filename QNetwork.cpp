@@ -13,7 +13,7 @@ QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w,
 	this->learning_rate = learning_rate;
 
 	// construct and register your layers
-	linear1 = register_module("linear1", torch::nn::Linear(num_inputs, hidden_size));
+	linear1 = register_module("linear1", torch::nn::Linear(num_inputs + num_actions, hidden_size));
 	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
 	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, num_actions));
 
@@ -32,11 +32,11 @@ QNetwork::~QNetwork()
 	delete optimizer;
 }
 
-torch::Tensor QNetwork::forward(torch::Tensor state)
+torch::Tensor QNetwork::forward(torch::Tensor state, torch::Tensor actions)
 {
 	torch::Tensor X;
 
-	X = torch::relu(linear1->forward(state));
+	X = torch::relu(linear1->forward(torch::cat({ state, actions }, 1)));
 	X = torch::relu(linear2->forward(X));
 	X = linear3->forward(X);
 

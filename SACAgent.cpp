@@ -52,13 +52,8 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 	load_checkpoint();
 	
 	// Copy over params
-	std::stringstream stream1;
-	save_to(*_q_net1, stream1);
-	load_from(*_target_q_net1, stream1);
-
-	std::stringstream stream2;
-	save_to(*_q_net2, stream2);
-	load_from(*_target_q_net2, stream2);
+	_transfer_params_v2(*_q_net1, *_target_q_net1);
+	_transfer_params_v2(*_q_net2, *_target_q_net2);
 
 	// Auto Entropy adjustment variables
 	_target_entropy = c10::Scalar(-1 * num_actions);
@@ -78,7 +73,16 @@ SACAgent::~SACAgent() {
 	delete _alpha_optimizer;
 }
 
-void SACAgent::save_to(torch::nn::Module& module, std::stringstream& fd) {
+void SACAgent::_transfer_params_v1(torch::nn::Module& from, torch::nn::Module& to) {
+	// char readBuffer[65536];
+	std::stringstream stream("...");
+	_save_to(from, stream);
+	_load_from(to, stream);
+}
+
+void SACAgent::_save_to(torch::nn::Module& module, std::stringstream& fd) {
+	
+	torch::autograd::GradMode::set_enabled(false);
 	torch::serialize::OutputArchive archive;
 	auto params = module.named_parameters(true /*recurse*/);
 	auto buffers = module.named_buffers(true /*recurse*/);
@@ -90,13 +94,34 @@ void SACAgent::save_to(torch::nn::Module& module, std::stringstream& fd) {
 	}
 
 	archive.save_to(fd);
+	torch::autograd::GradMode::set_enabled(true);
 }
 
-void SACAgent::load_from(torch::nn::Module& module, std::stringstream& fd) {
+void SACAgent::_transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing) {
+	torch::autograd::GradMode::set_enabled(false);
+
+	auto to_params = to.named_parameters(true);
+	auto from_params = from.named_parameters(true);
+
+	for (auto& from_param : from_params) {
+		torch::Tensor new_value = from_param.value();
+
+		if (param_smoothing) {
+			torch::Tensor old_value = to_params[from_param.key()];
+			new_value = _tau * new_value + (1 - _tau) * old_value;
+		} 
+		
+		to_params[from_param.key()].copy_(new_value);
+	}
+
+	torch::autograd::GradMode::set_enabled(true);
+}
+
+void SACAgent::_load_from(torch::nn::Module& module, std::stringstream& fd) {
+	torch::autograd::GradMode::set_enabled(false);
 	torch::serialize::InputArchive archive;
 	archive.load_from(fd);
-	torch::NoGradGuard no_grad;
-	std::smatch m;
+	torch::AutoGradMode enable_grad(false);
 	auto params = module.named_parameters(true);
 	auto buffers = module.named_buffers(true);
 	for (auto& val : params) {
@@ -105,6 +130,7 @@ void SACAgent::load_from(torch::nn::Module& module, std::stringstream& fd) {
 	for (auto& val : buffers) {
 		archive.read(val.key(), val.value(), true);
 	}
+	torch::autograd::GradMode::set_enabled(true);
 }
 
 void SACAgent::save_checkpoint()
@@ -173,5 +199,98 @@ torch::Tensor SACAgent::get_action(torch::Tensor state)
 
 void SACAgent::update(int batchSize, Buffer* replayBuffer)
 {
+	// Generate training sample
+	std::random_shuffle(replayBuffer->begin(), replayBuffer->end());
+	
+	double states[batchSize][_num_inputs];
+	double next_states[batchSize][_num_inputs];
+	double actions[batchSize][_num_actions];
+	double rewards[batchSize]; 
+	bool dones[batchSize];
 
+	for (int entry = 0;  entry < batchSize; entry++) {
+		TD train_data = replayBuffer->at(entry);
+
+		for (int i = 0; i < _num_inputs; i++) {
+			states[entry][i] = train_data.currentState.stateArray[i];
+			next_states[entry][i] = train_data.nextState.stateArray[i];
+
+			if (i < _num_actions) {
+				actions[entry][i] = train_data.actions[i];
+			}
+		}
+
+		rewards[entry] = train_data.reward;
+		dones[entry] = train_data.done;
+	}
+
+	// Prepare Training tensors
+	auto options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA, 1);
+	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, options);
+	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, options);
+	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, options);
+	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, options);
+	at::Tensor dones_t = torch::from_blob(dones, { batchSize }, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA, 1));
+
+	at::TensorList next = _policy_net->sample(next_states_t);
+	at::Tensor next_actions_t = next[0];
+	at::Tensor next_log_pi_t = next[1];
+
+	// Predicted rewards
+	at::Tensor next_q1s = _target_q_net1->forward(next_states_t, next_actions_t);
+	at::Tensor next_q2s = _target_q_net2->forward(next_states_t, next_actions_t);
+
+	// Conservative estimate of the value of the next state
+	at::Tensor next_q_target_t = torch::min(next_q1s, next_q2s) - _alpha * next_log_pi_t;
+	at::Tensor expected_qs = rewards_t + (1 - dones_t) * _gamma * next_q_target_t; 
+
+	// Q-Value loss
+	at::Tensor curr_q1s = _q_net1->forward(states_t, actions_t);
+	at::Tensor curr_q2s = _q_net2->forward(states_t, actions_t);
+	at::Tensor q1_loss = torch::nn::functional::mse_loss(curr_q1s, expected_qs.detach());
+	at::Tensor q2_loss = torch::nn::functional::mse_loss(curr_q2s, expected_qs.detach());
+
+	// update Q-Value networks
+	_q_net1->optimizer->zero_grad();
+	q1_loss.backward();
+	_q_net1->optimizer->step();
+
+	_q_net2->optimizer->zero_grad();
+	q2_loss.backward();
+	_q_net2->optimizer->step();
+
+	// Target Q-Value and Policy Network updates (delayed)
+	at::TensorList cur = _policy_net->sample(states_t);
+	at::Tensor pred_actions_t = cur[0];
+	at::Tensor pred_log_pi_t = cur[1];
+
+	if (_current_update == _max_delay) {
+		_current_update = 0;
+		at::Tensor min_q = torch::min(
+			_q_net1->forward(states_t, pred_actions_t),
+			_q_net2->forward(states_t, pred_actions_t)
+		);
+
+		at::Tensor policy_loss = (_alpha * pred_log_pi_t - min_q).mean();
+		
+		_policy_net->optimizer->zero_grad();
+		policy_loss.backward();
+		_policy_net->optimizer->step();
+
+		// Copy over network params with averaging
+		_transfer_params_v2(*_q_net1, *_target_q_net1, true);
+		_transfer_params_v2(*_q_net2, *_target_q_net2, true);
+
+		// Update alpha temperature
+		at::Tensor alpha_loss = (_log_alpha * (-pred_log_pi_t - _target_entropy).detach()).mean();
+
+		_alpha_optimizer->zero_grad();
+		alpha_loss.backward();
+		_alpha_optimizer->step();
+		_alpha = _log_alpha.exp().item().toDouble();
+
+	}
+	else {
+		_current_update++;
+	}
 }
