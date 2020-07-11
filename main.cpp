@@ -50,7 +50,7 @@
 #include "CaffeDetector.h"
 #include "CascadeDetector.h"
 #include "PID.h"
-#include "QNetwork.h"
+// #include "QNetwork.h"
 #include "util.h"
 #include "data.h"
 
@@ -62,7 +62,6 @@ using namespace Utility;
 
 // Last signal caught
 volatile sig_atomic_t sig_value1; 
-volatile sig_atomic_t sig_value2;
 pid_t parent_pid;
 
 static void usr_sig_handler1(const int sig_number, siginfo_t* sig_info, void* context);
@@ -101,7 +100,7 @@ int main(int argc, char** argv)
 	// Parent process
 	if (pid > 0) {
 
-		ShmPTRParent = (eventData*)shmat(ShmID, 0, 0);
+		ShmPTRParent = (ED*)shmat(ShmID, 0, 0);
 
 		if ((int)ShmPTRParent == -1) {
 			throw "Could not initialize shared memory";
@@ -110,9 +109,10 @@ int main(int argc, char** argv)
 		// user hyperparams
 		float recheckChance = 0.01;
 		bool useTracking = true;
-		bool draw = false;
-		bool showVideo = false;
-		std::string target = "person";
+		bool draw = true;
+		bool showVideo = true;
+		bool cascadeDetector = true;
+		std::string target = "sheep";
 
 		// program state variables
 		bool rechecked = false;
@@ -164,15 +164,19 @@ int main(int argc, char** argv)
 		std::string prototextFilePath = path + prototextFile;
 		std::string modelFilePath = path + modelFile;
 		dnn::Net net;
-		if (fileExists(modelFilePath) && fileExists(prototextFilePath)) {
-			net = dnn::readNetFromCaffe(prototextFilePath, modelFilePath);
-			if (net.empty()) {
-				throw "Error initializing caffe model";
+
+		if (!cascadeDetector) {
+			if (fileExists(modelFilePath) && fileExists(prototextFilePath)) {
+				net = dnn::readNetFromCaffe(prototextFilePath, modelFilePath);
+				if (net.empty()) {
+					throw "Error initializing caffe model";
+				}
+			}
+			else {
+				throw "Error finding model and prototext files";
 			}
 		}
-		else {
-			throw "Error finding model and prototext files";
-		}
+		
 
 		// HM::CaffeDetector cd(net, class_names);
 		HM::CascadeDetector cd;
@@ -317,7 +321,7 @@ int main(int argc, char** argv)
 						tilt.error = static_cast<double>(frameCenterY - objY);
 						pan.error = static_cast<double>(frameCenterX - objX);
 
-						// Enter State data
+						// Other State data
 						double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
 						pan.timestamp = elapsed;
 						tilt.timestamp = elapsed;
@@ -332,7 +336,7 @@ int main(int argc, char** argv)
 						ShmPTRParent[0] = tilt;
 						ShmPTRParent[1] = pan;
 			
-						if (useTracking && !isTracking) {
+						if (useTracking) {
 
 							roi.x = result.boundingBox.x;
 							roi.y = result.boundingBox.y;
@@ -343,7 +347,7 @@ int main(int argc, char** argv)
 								isTracking = true;
 								std::cout << "initialized!!" << std::endl;
 								std::cout << "Tracking Target..." << std::endl;
-							}
+							} 
 						}
 					}
 					else {
@@ -454,7 +458,7 @@ int main(int argc, char** argv)
 			parameters->ShmPTR = ShmPTRChild;
 			parameters->pan = pan;
 			parameters->tilt = tilt;
-			parameters->rate = 30; /* Updates per second */
+			parameters->rate = 6; /* Updates per second */
 			parameters->mutex = PTHREAD_MUTEX_INITIALIZER;
 			parameters->pid = pid2;
 			parameters->isTraining = false;
@@ -552,12 +556,13 @@ int main(int argc, char** argv)
 				if (sig_value1 == SIGUSR1) {
 					std::cout << "Performing training session..." << std::endl;
 					sleep(2);
-					// Read in training session data
+					// TODO Read in training session data
 					
 
-					// train on data
+					// TODO Remove this line
 					trainingBuffer->clear();
-					// send updated weights to parent
+					
+					// TODO send updated weights to parent
 					kill(getppid(), SIGUSR1);
 				}
 			}
@@ -596,7 +601,7 @@ void* panThread(void* args) {
 			angleX = static_cast<int>(pan->update(panData.error, 0));
 			currentState.Obj = panData.Obj;
 			currentState.Frame = panData.Frame;
-			currentState.Angle = panData.Angle;
+			currentState.Angle = angleX;
 			currentState.error = panData.error;
 			trainData.done = panData.done;
 			trainData.reward = panData.error;
@@ -612,23 +617,27 @@ void* panThread(void* args) {
 				programStart = false;
 				lastState = currentState;
 				goto sleep;
-			}
+			} 
 			else {
 				trainData.nextState = currentState;
 				trainData.currentState = lastState;
 				lastState = currentState;
-			}				
+			}
+
+			if (trainData.done) {
+				pan->init();
+			}
 		}
 		else {
-			pan->update(0.0, 0);
+			// pan->update(0.0, 0);
 			goto sleep;
 		}
 
-		if (parameters->isTraining == false) {
+		if (!parameters->isTraining) {
 			
 			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
 				
-				if (parameters->isTraining == false) {
+				if (!parameters->isTraining) {
 					
 					try {
 						if (trainingBuffer->size() == parameters->maxBufferSize) {
@@ -687,10 +696,10 @@ void* tiltThread(void* args) {
 		if (!tiltData.dirty && !tiltData.isOld(lastTimeStep)) { // If its not old and not already read
 
 			lastTimeStep = tiltData.timestamp;
-			angleY = static_cast<int>(tilt->update(tiltData.error, 0));
+			angleY = static_cast<int>(tilt->update(tiltData.error, 0)) * -1;
 			currentState.Obj = tiltData.Obj;
 			currentState.Frame = tiltData.Frame;
-			currentState.Angle = tiltData.Angle;
+			currentState.Angle = angleY;
 			currentState.error = tiltData.error;
 			trainData.done = tiltData.done;
 			trainData.reward = tiltData.error;
@@ -712,17 +721,21 @@ void* tiltThread(void* args) {
 				trainData.currentState = lastState;
 				lastState = currentState;
 			}
+
+			if (trainData.done) {
+				tilt->init();
+			}
 		}
 		else {
-			tilt->update(0.0, 0);
+			// tilt->update(0.0, 0);
 			goto sleep;
 		}
 
-		if (parameters->isTraining == false) {
+		if (!parameters->isTraining) {
 
 			if (pthread_mutex_trylock(&parameters->mutex) == 0) {
 
-				if (parameters->isTraining == false) {
+				if (!parameters->isTraining) {
 
 					try {
 						if (trainingBuffer->size() == parameters->maxBufferSize) {

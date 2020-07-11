@@ -9,23 +9,21 @@
 #include <boost/interprocess/containers/vector.hpp>
 #include <boost/interprocess/allocators/allocator.hpp>
 
-// These values allow for async communication between parent processand child process's threads
-// These garentee, in a non-blocking way, the child process will never read a value twice.
-// But the child's threads may be reading old values at any given time.
+/* eventData allows for async communication between parent processand child process's threads
+   These garentee, in a non-blocking way, the child process will never read a value twice.
+   But the child's threads may be reading old values at any given time. */
 struct eventData {
 
-	eventData() : dirty(false), old(false), done(false) {}
+	eventData() : dirty(false), done(false) {}
 
 	bool isOld(double t) {
 		return (timestamp - t == 0.0);
 	};
 
 	bool dirty;
-	bool old;
 	bool done;
 	double Obj;
 	double Frame;
-	double Angle;
 	double error;
 	double timestamp;
 
