@@ -75,6 +75,7 @@
     <ClCompile Include="CaffeDetector.cpp" />
     <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="track.cpp" />
     <ClCompile Include="QNetwork.cpp" />
     <ClCompile Include="Normal.cpp" />
     <ClCompile Include="ObjectDetector.cpp" />

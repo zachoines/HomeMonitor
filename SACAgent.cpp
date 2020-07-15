@@ -180,20 +180,17 @@ void SACAgent::load_checkpoint()
 torch::Tensor SACAgent::get_action(torch::Tensor state)
 {
 
-	at::TensorList results = _policy_net->forward(state);
+	at::Tensor results = _policy_net->forward(state);
+	
 	at::Tensor mean = results[0];
 	at::Tensor log_std = results[1];
-	at::Tensor std = log_std.exp();
+	at::Tensor std = torch::exp(log_std);
 
 	Normal normal = Normal(mean, std);
 	torch::Tensor z = normal.sample();
 	z.set_requires_grad(false);
 	torch::Tensor actions = torch::tanh(z);
 	
-	// Normalize actions
-	actions = _action_min + (actions + 1.0) * 0.5 * (_action_max - _action_min);
-	actions.clamp(_action_min, _action_max);
-
 	return actions;
 }
 
@@ -225,7 +222,7 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 	}
 
 	// Prepare Training tensors
-	auto options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA, 1);
+	auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU, -1);
 	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, options);
 	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, options);
 	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, options);

@@ -17,14 +17,30 @@ QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w,
 	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
 	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, num_actions));
 
+	torch::autograd::GradMode::set_enabled(false);
+	
+	linear1->weight.uniform_(-init_w, init_w);
+	linear2->weight.uniform_(-init_w, init_w);
+	linear3->weight.uniform_(-init_w, init_w);
+	linear1->bias.uniform_(-init_w, init_w);
+	linear2->bias.uniform_(-init_w, init_w);
+	linear3->bias.uniform_(-init_w, init_w);
+
+	/*torch::nn::init::kaiming_normal_(linear1->weight);
+	torch::nn::init::kaiming_normal_(linear2->weight);
+	torch::nn::init::kaiming_normal_(linear3->weight);
+	linear1->bias.zero_();
+	linear2->bias.zero_();
+	linear3->bias.zero_();*/
+
+	// auto p = this->named_parameters(true);
+	//for (auto& val : p) {
+	//	std::cout << "Key: " << val.key() << ", Value: " << val.value() << std::endl;
+	//}
+
+	torch::autograd::GradMode::set_enabled(true);
+	
 	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
-
-	auto p = this->named_parameters(false);
-	auto weights = p.find("weight");
-	auto biases = p.find("bias");
-
-	if (weights != nullptr) torch::nn::init::uniform_(*weights);
-	if (biases != nullptr) torch::nn::init::uniform_(*biases);
 }
 
 QNetwork::~QNetwork()

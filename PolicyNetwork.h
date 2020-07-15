@@ -16,8 +16,8 @@ public:
 	torch::optim::Adam* optimizer = nullptr;
 	PolicyNetwork(int num_inputs, int num_actions, int hidden_size, int init_w = 3e-3, int log_std_min = -20, int log_std_max = 2);
 	~PolicyNetwork();
-	at::TensorList forward(torch::Tensor state);
-	at::TensorList sample(torch::Tensor state, double epsilon = 1e-6);
+	at::Tensor forward(torch::Tensor state);
+	at::Tensor sample(torch::Tensor state, double epsilon = 1e-6);
 
 } typedef PN;
 

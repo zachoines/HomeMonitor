@@ -56,6 +56,8 @@ typedef boost::interprocess::vector<TD, ShmemAllocator> Buffer;
 struct parameter {
 	PID* pan;
 	PID* tilt;
+	int height;
+	int width;
 
 	int pid;
 	ED* ShmPTR;

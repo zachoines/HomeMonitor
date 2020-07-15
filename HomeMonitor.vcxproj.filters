@@ -1,7 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
     <ClCompile Include="ObjectDetector.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -19,6 +18,8 @@
     <ClCompile Include="Normal.cpp" />
     <ClCompile Include="SACAgent.cpp" />
     <ClCompile Include="QNetwork.cpp" />
+    <ClCompile Include="track.cpp" />
+    <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="readme.md">

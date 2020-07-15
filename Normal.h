@@ -12,6 +12,7 @@ public:
 	Normal(torch::Tensor loc, torch::Tensor scale);
 
 	torch::Tensor sample();
+	torch::Tensor rsample();
 	torch::Tensor log_prob(torch::Tensor value);
 };
 

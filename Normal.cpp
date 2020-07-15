@@ -15,6 +15,12 @@ torch::Tensor Normal::sample()
 	return at::normal(loc, scale);
 }
 
+torch::Tensor Normal::rsample() {
+	torch::Tensor eps = loc.clone();
+	eps.zero_().normal_();
+	return loc + eps * scale;
+}
+
 torch::Tensor Normal::log_prob(torch::Tensor value)
 {
 

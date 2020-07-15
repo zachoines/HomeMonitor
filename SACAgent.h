@@ -29,7 +29,7 @@ private:
 	void _transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing = false);
 
 public:
-	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max, double action_min, double gamma = 0.99, double tau = 0.01, double alpha = 0.2, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
+	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max = 1.0, double action_min = 0.0, double gamma = 0.99, double tau = 0.01, double alpha = 0.2, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
 	~SACAgent();
 
 	void update(int batchSize, Buffer* replayBuffer);

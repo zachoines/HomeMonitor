@@ -20,46 +20,62 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, i
 	mean_Linear = register_module("mean_Linear", torch::nn::Linear(hidden_size, num_actions));
 	log_std_linear = register_module("log_std_linear", torch::nn::Linear(hidden_size, num_actions));
 
-	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
-
 	// Initialize params
-	auto p = this->named_parameters(false);
-	auto weights = p.find("weight");
-	auto biases = p.find("bias");
+	torch::autograd::GradMode::set_enabled(false);
+	
+	linear1->weight.uniform_(-init_w, init_w);
+	linear2->weight.uniform_(-init_w, init_w);
+	mean_Linear->weight.uniform_(-init_w, init_w);
+	log_std_linear->weight.uniform_(-init_w, init_w);
+	linear1->bias.uniform_(-init_w, init_w);
+	linear2->bias.uniform_(-init_w, init_w);
+	mean_Linear->bias.uniform_(-init_w, init_w);
+	log_std_linear->bias.uniform_(-init_w, init_w);
 
-	if (weights != nullptr) torch::nn::init::uniform_(*weights);
-	if (biases != nullptr) torch::nn::init::uniform_(*biases);
+	/*torch::nn::init::kaiming_normal_(linear1->weight);
+	torch::nn::init::kaiming_normal_(linear2->weight);
+	torch::nn::init::kaiming_normal_(mean_Linear->weight);
+	torch::nn::init::kaiming_normal_(log_std_linear->weight);
+	linear1->bias.zero_();
+	linear2->bias.zero_();
+	mean_Linear->bias.zero_();
+	log_std_linear->bias.zero_();*/
+	
+	torch::autograd::GradMode::set_enabled(true);
+
+	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
 }
 
 PolicyNetwork::~PolicyNetwork() {
 	delete optimizer;
 }
 
-at::TensorList PolicyNetwork::forward(torch::Tensor state) {
+torch::Tensor PolicyNetwork::forward(torch::Tensor state) {
 	torch::Tensor X, mean, log_std;
-	
+
 	X = torch::relu(linear1->forward(state));
 	X = torch::relu(linear2->forward(X));
 	mean = mean_Linear->forward(X);
 	log_std = log_std_linear->forward(X);
 	log_std = torch::clamp(log_std, log_std_min, log_std_max);
 
-	return { mean, log_std };
+	return torch::cat({ { mean }, { log_std } }, 0);
 }
 
-at::TensorList PolicyNetwork::sample(torch::Tensor state, double epsilon) {
+torch::Tensor PolicyNetwork::sample(torch::Tensor state, double epsilon) {
 	torch::Tensor X, mean, log_std, std, z, action, log_prob, log_pi;
 
-	at::TensorList result = this->forward(state);
+	at::Tensor result = this->forward(state);
 	mean = result[0];
 	log_std = result[1];
 	std = torch::exp(log_std);
 	Normal normal = Normal(mean, std);
-	z = normal.sample();
+	z = normal.rsample();
+	std::cout << z << std::endl;
 	action = torch::tanh(z);
 
 	log_pi = normal.log_prob(z) - torch::log(1 - action.pow(2) + epsilon);
 	log_pi = log_pi.sum(1, true);
 
-	return { action, log_pi };
+	return torch::cat({ { action }, {log_pi} }, 0);
 }

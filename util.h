@@ -108,6 +108,15 @@ namespace Utility {
 		return frame;
 	}
 
+	static double errorToReward(int error, int high, int low) {
+		double scaledError = static_cast<double>(mapOutput(error, low, high, 0, 1000)) / 1000.0;
+		return 1.0 - scaledError;
+	}
+
+	static double rescaleAction(double action, double min, double max) {
+		return action * (max - min) / 2.0 + (max + min) / 2.0;
+	}
+
 	static int printDirectory(const char* path) {
 		DIR* dir;
 		struct dirent* ent;
