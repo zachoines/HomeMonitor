@@ -203,7 +203,7 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 	double next_states[batchSize][_num_inputs];
 	double actions[batchSize][_num_actions];
 	double rewards[batchSize]; 
-	bool dones[batchSize];
+	double dones[batchSize];
 
 	for (int entry = 0;  entry < batchSize; entry++) {
 		TD train_data = replayBuffer->at(entry);
@@ -218,28 +218,31 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 		}
 
 		rewards[entry] = train_data.reward;
-		dones[entry] = train_data.done;
+		dones[entry] = static_cast<double>(train_data.done);
 	}
 
 	// Prepare Training tensors
-	auto options = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU, -1);
-	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, options);
-	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, options);
-	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, options);
-	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, options);
-	at::Tensor dones_t = torch::from_blob(dones, { batchSize }, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA, 1));
+	auto optionsDouble = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU, -1);
+	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, optionsDouble);
+	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, optionsDouble);
+	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, optionsDouble);
+	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, optionsDouble);
+	at::Tensor dones_t = torch::from_blob(dones, { batchSize }, optionsDouble);
 
-	at::TensorList next = _policy_net->sample(next_states_t);
-	at::Tensor next_actions_t = next[0];
-	at::Tensor next_log_pi_t = next[1];
-
+	at::Tensor next = _policy_net->sample(next_states_t, batchSize);
+	at::Tensor reshapedResult = next.view({ 2, batchSize, _num_actions });
+	at::Tensor next_actions_t = reshapedResult[0];
+	at::Tensor next_log_pi_t = reshapedResult[1];
+	next_log_pi_t = next_log_pi_t.sum(1, true);
+	
 	// Predicted rewards
 	at::Tensor next_q1s = _target_q_net1->forward(next_states_t, next_actions_t);
 	at::Tensor next_q2s = _target_q_net2->forward(next_states_t, next_actions_t);
 
 	// Conservative estimate of the value of the next state
 	at::Tensor next_q_target_t = torch::min(next_q1s, next_q2s) - _alpha * next_log_pi_t;
-	at::Tensor expected_qs = rewards_t + (1 - dones_t) * _gamma * next_q_target_t; 
+	at::Tensor estimated_future_rewards = torch::unsqueeze(1.0 - dones_t, 1) * _gamma * next_q_target_t;
+	at::Tensor expected_qs = torch::unsqueeze(rewards_t, 1) + estimated_future_rewards;
 
 	// Q-Value loss
 	at::Tensor curr_q1s = _q_net1->forward(states_t, actions_t);
@@ -257,9 +260,10 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 	_q_net2->optimizer->step();
 
 	// Target Q-Value and Policy Network updates (delayed)
-	at::TensorList cur = _policy_net->sample(states_t);
-	at::Tensor pred_actions_t = cur[0];
-	at::Tensor pred_log_pi_t = cur[1];
+	at::Tensor current = _policy_net->sample(states_t, batchSize);
+	at::Tensor reshapedCurrent = current.view({ 2, batchSize, _num_actions });
+	at::Tensor pred_actions_t = reshapedCurrent[0];
+	at::Tensor pred_log_pi_t = reshapedCurrent[1];
 
 	if (_current_update == _max_delay) {
 		_current_update = 0;

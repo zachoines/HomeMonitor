@@ -25,9 +25,10 @@
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
 #include <torch/torch.h>
-#include <boost/interprocess/managed_shared_memory.hpp>
-#include <boost/interprocess/containers/vector.hpp>
-#include <boost/interprocess/allocators/allocator.hpp>
+//#include <boost/interprocess/managed_shared_memory.hpp>
+//#include <boost/interprocess/containers/vector.hpp>
+//#include <boost/interprocess/allocators/allocator.hpp>
+#include <vector>
 #include <algorithm>
 
 // OpenCV imports
@@ -69,6 +70,7 @@ pthread_mutex_t lock_t = PTHREAD_MUTEX_INITIALIZER;
 SACAgent* pidAutoTuner = nullptr;
 cv::VideoCapture camera(0);
 torch::Device device(torch::kCPU);
+Buffer* trainingBuffer;
 
 
 int main(int argc, char** argv)
@@ -76,6 +78,8 @@ int main(int argc, char** argv)
 	auto default_dtype = caffe2::TypeMeta::Make<double>();
 	torch::set_default_dtype(default_dtype);
 	pidAutoTuner = new SACAgent(4, 7, 3, 1.0, 0.0);
+	trainingBuffer = new Buffer();
+	
 
 	// Setup Torch
 	if (torch::cuda::is_available()) {
@@ -116,23 +120,9 @@ int main(int argc, char** argv)
 
 
 	param* parameters = (param*)malloc(sizeof(param));
-	parameters->maxBufferSize = 256;
 	parameters->height = height;
 	parameters->width = width;
-	Buffer* trainingBuffer;
-
-	try {
-		// Shared memory for training buffers
-		boost::interprocess::shared_memory_object::remove("SharedTrainingBuffer");
-		boost::interprocess::managed_shared_memory segment(boost::interprocess::create_only, "SharedTrainingBuffer", sizeof(TD) * parameters->maxBufferSize * 2);
-		ShmemAllocator alloc_inst(segment.get_segment_manager());
-		trainingBuffer = segment.construct<Buffer>("Buffer") (alloc_inst);
-	}
-	catch (...) {
-		boost::interprocess::shared_memory_object::remove("SharedTrainingBuffer");
-		std::cout << "Error encountered in servo and PID process." << std::endl;
-		throw "Issue with shared memory object";
-	}
+	parameters->config = new Config();
 
 	sendComand(0x8, 0x0, fd); // Reset servos
 
@@ -165,8 +155,6 @@ int main(int argc, char** argv)
 
 void* panThread(void* args) {
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
-	boost::interprocess::managed_shared_memory segment(boost::interprocess::open_only, "SharedTrainingBuffer");
-	Buffer* trainingBuffer;
 	param* parameters = (param*)args;
 
 	PID* pan = parameters->pan;
@@ -179,7 +167,6 @@ void* panThread(void* args) {
 	double lastTimeStep;
 	SD lastState;
 
-	trainingBuffer = segment.find<Buffer>("Buffer").first;
 	pan->init();
 
 
@@ -255,7 +242,7 @@ void* panThread(void* args) {
 				if (!parameters->isTraining) {
 
 					try {
-						if (trainingBuffer->size() == parameters->maxBufferSize) {
+						if (trainingBuffer->size() == parameters->config->maxBufferSize) {
 							std::cout << "Sending a training request..." << std::endl;
 							parameters->isTraining = true;
 							pthread_cond_broadcast(&cond_t);
@@ -285,8 +272,6 @@ void* panThread(void* args) {
 
 void* tiltThread(void* args) {
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
-	boost::interprocess::managed_shared_memory segment(boost::interprocess::open_only, "SharedTrainingBuffer");
-	Buffer* trainingBuffer;
 
 	param* parameters = (param*)args;
 
@@ -301,7 +286,6 @@ void* tiltThread(void* args) {
 	SD lastState;
 
 	tilt->init();
-	trainingBuffer = segment.find<Buffer>("Buffer").first;
 
 	while (true) {
 		SD currentState;
@@ -367,7 +351,7 @@ void* tiltThread(void* args) {
 				if (!parameters->isTraining) {
 
 					try {
-						if (trainingBuffer->size() == parameters->maxBufferSize) {
+						if (trainingBuffer->size() == parameters->config->maxBufferSize) {
 							std::cout << "Sending a training request..." << std::endl;
 							parameters->isTraining = true;
 							pthread_cond_broadcast(&cond_t);
@@ -682,10 +666,6 @@ void* detectThread(void* args)
 void* autoTuneThread(void* args)
 {
 	param* parameters = (param*)args;
-	
-	boost::interprocess::managed_shared_memory segment(boost::interprocess::open_only, "SharedTrainingBuffer");
-	Buffer* trainingBuffer;
-	trainingBuffer = segment.find<Buffer>("Buffer").first;
 
 	while (true) {
 		pthread_mutex_lock(&lock_t);
@@ -694,8 +674,8 @@ void* autoTuneThread(void* args)
 		}
 
 		// Perform training session
-		for (int i = 0; i < 4; i++) {
-			pidAutoTuner->update(parameters->maxBufferSize / 4, trainingBuffer);
+		for (int i = 0; i < parameters->config->maxTrainingSessions; i++) {
+			pidAutoTuner->update(parameters->config->batchSize, trainingBuffer);
 		}
 
 		trainingBuffer->clear();

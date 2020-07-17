@@ -3,19 +3,18 @@
 	This file should contain data formats, structs, unions, and typedefs.
 	Keeps main.cpp cleaner.
 */
+#include <vector>
 #include "PID.h"
 // #include "Model.h"
-#include <boost/interprocess/managed_shared_memory.hpp>
-#include <boost/interprocess/containers/vector.hpp>
-#include <boost/interprocess/allocators/allocator.hpp>
+//#include <boost/interprocess/managed_shared_memory.hpp>
+//#include <boost/interprocess/containers/vector.hpp>
+//#include <boost/interprocess/allocators/allocator.hpp>
+
 
 /* eventData allows for async communication between parent processand child process's threads
    These garentee, in a non-blocking way, the child process will never read a value twice.
    But the child's threads may be reading old values at any given time. */
-struct eventData {
-
-	eventData() : dirty(false), done(false) {}
-
+struct EventData {
 	bool isOld(double t) {
 		return (timestamp - t == 0.0);
 	};
@@ -27,9 +26,10 @@ struct eventData {
 	double error;
 	double timestamp;
 
+	EventData() : dirty(false), done(false) {}
 } typedef ED;
 
-struct stateData {
+struct StateData {
 	double Obj;
 	double Frame;
 	double Angle;
@@ -50,10 +50,22 @@ struct TrainData {
 	bool done;
 } typedef TD;
 
-typedef boost::interprocess::allocator<TD, boost::interprocess::managed_shared_memory::segment_manager> ShmemAllocator;
-typedef boost::interprocess::vector<TD, ShmemAllocator> Buffer;
+// typedef boost::interprocess::allocator<TD, boost::interprocess::managed_shared_memory::segment_manager> ShmemAllocator;
+// typedef boost::interprocess::vector<TD, ShmemAllocator> SharedBuffer;
+typedef std::vector<TD> Buffer;
 
-struct parameter {
+struct Config {
+
+	
+
+	int maxBufferSize;
+	int maxTrainingSessions;
+	int batchSize;
+
+	Config() : maxBufferSize(32), maxTrainingSessions(8), batchSize(32) {}
+} typedef cfg;
+
+struct Parameter {
 	PID* pan;
 	PID* tilt;
 	int height;
@@ -66,5 +78,6 @@ struct parameter {
 	pthread_mutex_t mutex;
 
 	bool isTraining;
-	int maxBufferSize;
+	cfg* config;
+	
 } typedef param;

@@ -6,13 +6,14 @@
 #include <torch/torch.h>
 #include "Normal.h"
 
-PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, int init_w, int log_std_min, int log_std_max) {
+PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, double init_w, int log_std_min, int log_std_max) {
 	this->num_inputs = num_inputs;
 	this->num_actions = num_actions;
 	this->hidden_size = hidden_size;
 	this->init_w = init_w;
 	this->log_std_min = log_std_min;
 	this->log_std_max = log_std_max;
+	this->learning_rate = 1e-4;
 
 	// Set network structure
 	linear1 = register_module("linear1", torch::nn::Linear(num_inputs, hidden_size));
@@ -62,20 +63,19 @@ torch::Tensor PolicyNetwork::forward(torch::Tensor state) {
 	return torch::cat({ { mean }, { log_std } }, 0);
 }
 
-torch::Tensor PolicyNetwork::sample(torch::Tensor state, double epsilon) {
+torch::Tensor PolicyNetwork::sample(torch::Tensor state, int batchSize, double epsilon) {
 	torch::Tensor X, mean, log_std, std, z, action, log_prob, log_pi;
-
+	
 	at::Tensor result = this->forward(state);
-	mean = result[0];
-	log_std = result[1];
+	at::Tensor reshapedResult = result.view({2, batchSize, num_actions });
+	
+	mean = reshapedResult[0];
+	log_std = reshapedResult[1];
 	std = torch::exp(log_std);
 	Normal normal = Normal(mean, std);
 	z = normal.rsample();
-	std::cout << z << std::endl;
 	action = torch::tanh(z);
-
-	log_pi = normal.log_prob(z) - torch::log(1 - action.pow(2) + epsilon);
-	log_pi = log_pi.sum(1, true);
+	log_pi = normal.log_prob(z) - torch::log(1 - torch::add(torch::pow(action, 2), epsilon));
 
 	return torch::cat({ { action }, {log_pi} }, 0);
 }

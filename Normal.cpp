@@ -24,13 +24,8 @@ torch::Tensor Normal::rsample() {
 torch::Tensor Normal::log_prob(torch::Tensor value)
 {
 
-	at::TensorList tensors = torch::broadcast_tensors({ loc, scale, value });
-	loc = tensors[0];
-	scale = tensors[1];
-	value = tensors[2];
-
 	torch::Tensor var = scale.pow(2);
 	torch::Tensor log_scale = var.log();
 
-	return -((value - loc).pow(2) / (2 * var) - log_scale - torch::log(torch::sqrt(torch::tensor(2 * M_PI))));
+	return -((value - loc).pow(2) / (2 * var) - log_scale - torch::log(torch::sqrt(torch::tensor({ 2.0 * M_PI }))));
 }

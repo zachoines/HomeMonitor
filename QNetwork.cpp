@@ -4,7 +4,7 @@
 #include <torch/torch.h>
 
 
-QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w, int learning_rate)
+QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, double init_w, double learning_rate)
 {
 	this->num_inputs = num_inputs;
 	this->num_actions = num_actions;
@@ -15,7 +15,7 @@ QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, int init_w,
 	// construct and register your layers
 	linear1 = register_module("linear1", torch::nn::Linear(num_inputs + num_actions, hidden_size));
 	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
-	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, num_actions));
+	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, 1));
 
 	torch::autograd::GradMode::set_enabled(false);
 	
