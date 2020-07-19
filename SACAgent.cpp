@@ -36,7 +36,7 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 
 	_gamma = gamma;
 	_tau = tau;
-	_alpha = alpha;
+	_alpha = torch::tensor(alpha);
 	_a_lr = a_lr;
 	_q_lr = q_lr;
 	_p_lr = p_lr;
@@ -98,7 +98,7 @@ void SACAgent::_save_to(torch::nn::Module& module, std::stringstream& fd) {
 }
 
 void SACAgent::_transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing) {
-	torch::autograd::GradMode::set_enabled(false);
+	// torch::autograd::GradMode::set_enabled(false);
 
 	auto to_params = to.named_parameters(true);
 	auto from_params = from.named_parameters(true);
@@ -108,17 +108,17 @@ void SACAgent::_transfer_params_v2(torch::nn::Module& from, torch::nn::Module& t
 
 		if (param_smoothing) {
 			torch::Tensor old_value = to_params[from_param.key()];
-			new_value = _tau * new_value + (1 - _tau) * old_value;
+			new_value = _tau * new_value + (1.0 - _tau) * old_value;
 		} 
 		
-		to_params[from_param.key()].copy_(new_value);
+		to_params[from_param.key()].data().copy_(new_value);
 	}
 
-	torch::autograd::GradMode::set_enabled(true);
+	// torch::autograd::GradMode::set_enabled(true);
 }
 
 void SACAgent::_load_from(torch::nn::Module& module, std::stringstream& fd) {
-	torch::autograd::GradMode::set_enabled(false);
+	// torch::autograd::GradMode::set_enabled(false);
 	torch::serialize::InputArchive archive;
 	archive.load_from(fd);
 	torch::AutoGradMode enable_grad(false);
@@ -130,37 +130,41 @@ void SACAgent::_load_from(torch::nn::Module& module, std::stringstream& fd) {
 	for (auto& val : buffers) {
 		archive.read(val.key(), val.value(), true);
 	}
-	torch::autograd::GradMode::set_enabled(true);
+	// torch::autograd::GradMode::set_enabled(true);
 }
 
 void SACAgent::save_checkpoint()
 {
 	// Load from file if exists
 	std::string path = get_current_dir_name();
-	std::string QModelFile1 = "/Q_Net_Checkpoint1.pt";
-	std::string QModelFile2 = "/Q_Net_Checkpoint2.pt";
-	std::string PModelFile = "/P_Net_Checkpoint.pt";
+	std::string QModelFile1 = path + "/Q_Net_Checkpoint1.pt";
+	std::string QModelFile2 = path + "/Q_Net_Checkpoint2.pt";
+	std::string PModelFile = path + "/P_Net_Checkpoint.pt";
+	std::string AlphaFile = path + "/Alpha_Checkpoint.pt";
 
 	torch::serialize::OutputArchive QModelArchive1;
-	QModelArchive1.save_to(QModelFile1);
 	_q_net1->save(QModelArchive1);
+	QModelArchive1.save_to(QModelFile1);
 
 	torch::serialize::OutputArchive QModelArchive2;
-	QModelArchive2.save_to(QModelFile2);
 	_q_net2->save(QModelArchive2);
+	QModelArchive2.save_to(QModelFile2);
 
-	torch::serialize::OutputArchive PModelArchive1;
-	PModelArchive1.save_to(PModelFile);
-	_policy_net->save(PModelArchive1);
+	torch::serialize::OutputArchive PModelArchive;
+	_policy_net->save(PModelArchive);
+	PModelArchive.save_to(PModelFile);
+
+	torch::save(_alpha, AlphaFile);
 }
 
 void SACAgent::load_checkpoint()
 {
 	// Load from file if exists
 	std::string path = get_current_dir_name();
-	std::string QModelFile1 = "/Q_Net_Checkpoint1.pt";
-	std::string QModelFile2 = "/Q_Net_Checkpoint2.pt";
-	std::string PModelFile = "/P_Net_Checkpoint.pt";
+	std::string QModelFile1 = path + "/Q_Net_Checkpoint1.pt";
+	std::string QModelFile2 = path + "/Q_Net_Checkpoint2.pt";
+	std::string PModelFile = path + "/P_Net_Checkpoint.pt";
+	std::string AlphaFile = path + "/Alpha_Checkpoint.pt";
 
 	if (Utility::fileExists(QModelFile1) && Utility::fileExists(QModelFile2) && Utility::fileExists(PModelFile)) {
 		torch::serialize::InputArchive QModelArchive1;
@@ -171,9 +175,12 @@ void SACAgent::load_checkpoint()
 		QModelArchive2.load_from(QModelFile2);
 		_q_net2->load(QModelArchive2);
 
-		torch::serialize::InputArchive PModelArchive1;
-		PModelArchive1.load_from(PModelFile);
-		_policy_net->load(PModelArchive1);
+		torch::serialize::InputArchive PModelArchive;
+		PModelArchive.load_from(PModelFile);
+		_policy_net->load(PModelArchive);
+
+		torch::load(_alpha, AlphaFile);
+		
 	}
 }
 
@@ -264,6 +271,7 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 	at::Tensor reshapedCurrent = current.view({ 2, batchSize, _num_actions });
 	at::Tensor pred_actions_t = reshapedCurrent[0];
 	at::Tensor pred_log_pi_t = reshapedCurrent[1];
+	pred_log_pi_t = pred_log_pi_t.sum(1, true);
 
 	if (_current_update == _max_delay) {
 		_current_update = 0;
@@ -273,6 +281,7 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 		);
 
 		at::Tensor policy_loss = (_alpha * pred_log_pi_t - min_q).mean();
+		std::cout << "Policy Loss: " << policy_loss << std::endl;
 		
 		_policy_net->optimizer->zero_grad();
 		policy_loss.backward();
@@ -282,16 +291,25 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 		_transfer_params_v2(*_q_net1, *_target_q_net1, true);
 		_transfer_params_v2(*_q_net2, *_target_q_net2, true);
 
-		// Update alpha temperature
-		at::Tensor alpha_loss = (_log_alpha * (-pred_log_pi_t - _target_entropy).detach()).mean();
-
-		_alpha_optimizer->zero_grad();
-		alpha_loss.backward();
-		_alpha_optimizer->step();
-		_alpha = _log_alpha.exp().item().toDouble();
-
+		if (_current_save_delay == _max_save_delay) {
+			_current_save_delay = 0;
+			save_checkpoint();
+		}
+		
 	}
 	else {
+		_current_save_delay++;
 		_current_update++;
 	}
+
+	// Update temperature
+	// Update alpha temperature
+	at::Tensor alpha_loss = (_log_alpha * (-pred_log_pi_t - _target_entropy).detach()).mean();
+
+	_alpha_optimizer->zero_grad();
+	alpha_loss.backward();
+	_alpha_optimizer->step();
+	_alpha = _log_alpha.exp();
+	std::cout << "Current alpha: " << _alpha << std::endl;
+
 }

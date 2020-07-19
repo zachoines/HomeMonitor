@@ -77,7 +77,7 @@ int main(int argc, char** argv)
 {
 	auto default_dtype = caffe2::TypeMeta::Make<double>();
 	torch::set_default_dtype(default_dtype);
-	pidAutoTuner = new SACAgent(4, 7, 3, 1.0, 0.0);
+	pidAutoTuner = new SACAgent(4, 256, 3, 1.0, 0.0);
 	trainingBuffer = new Buffer();
 	
 

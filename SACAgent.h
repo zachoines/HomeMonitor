@@ -7,10 +7,12 @@
 class SACAgent
 {
 private:
-	double _gamma, _tau, _alpha, _a_lr, _q_lr, _p_lr;
+	double _gamma, _tau, _a_lr, _q_lr, _p_lr;
 	int _num_inputs, _num_actions;
 	double _action_max, _action_min;
 	int _current_update = 0;
+	int _current_save_delay = 0;
+	int _max_save_delay = 100;
 	int _max_delay = 2;
 	
 
@@ -20,7 +22,7 @@ private:
 	QNetwork* _target_q_net2;
 	PolicyNetwork* _policy_net;
 
-	torch::Tensor _log_alpha;
+	torch::Tensor _log_alpha, _alpha;
 	c10::Scalar _target_entropy;
 	torch::optim::Adam* _alpha_optimizer = nullptr;
 	void _save_to(torch::nn::Module& model, std::stringstream& fd);
