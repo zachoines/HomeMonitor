@@ -211,13 +211,17 @@ void SACAgent::update(int batchSize, Buffer* replayBuffer)
 	double actions[batchSize][_num_actions];
 	double rewards[batchSize]; 
 	double dones[batchSize];
+	double currentStateArray[_num_inputs];
+	double nextStateArray[_num_inputs];
 
 	for (int entry = 0;  entry < batchSize; entry++) {
 		TD train_data = replayBuffer->at(entry);
+		train_data.currentState.getStateArray(currentStateArray);
+		train_data.nextState.getStateArray(nextStateArray);
 
 		for (int i = 0; i < _num_inputs; i++) {
-			states[entry][i] = train_data.currentState.stateArray[i];
-			next_states[entry][i] = train_data.nextState.stateArray[i];
+			states[entry][i] = currentStateArray[i];
+			next_states[entry][i] = nextStateArray[i];
 
 			if (i < _num_actions) {
 				actions[entry][i] = train_data.actions[i];

@@ -30,16 +30,26 @@ struct EventData {
 } typedef ED;
 
 struct StateData {
-	double Obj;
-	double Frame;
-	double Angle;
+	double objCenter;
+	double frameCenter;
 	double error;
-	double stateArray[4] = {
-		this->Obj,
-		this->Frame,
-		this->Angle,
-		this->error
-	};
+	double currentAngle;
+	double objCenterOld;
+	double frameCenterOld;
+	double errorOld;
+	double lastAngle;
+
+	double getStateArray(double state[8]) {
+		state[0] = objCenter;
+		state[1] = frameCenter;
+		state[2] = error;
+		state[3] = currentAngle;
+		state[4] = objCenterOld;
+		state[5] = frameCenterOld;
+		state[6] = errorOld;
+		state[7] = lastAngle;
+	}
+
 } typedef SD;
 
 struct TrainData {
@@ -57,12 +67,20 @@ typedef std::vector<TD> Buffer;
 struct Config {
 
 	
-
+	int numActions;
+	int numHidden;
+	int numInput;
 	int maxBufferSize;
 	int maxTrainingSessions;
 	int batchSize;
 
-	Config() : maxBufferSize(32), maxTrainingSessions(8), batchSize(32) {}
+	Config() : 
+		numActions(1), 
+		numHidden(256), 
+		numInput(8), 
+		maxBufferSize(128), 
+		maxTrainingSessions(4), 
+		batchSize(32) {}
 } typedef cfg;
 
 struct Parameter {

@@ -62,6 +62,7 @@ void* tiltThread(void* args);
 void* panThread(void* args);
 void* detectThread(void* args);
 void* autoTuneThread(void* args);
+void* nonPIDPanThread(void* args);
 
 ED eventDataArray[2];
 pthread_cond_t cond_t = PTHREAD_COND_INITIALIZER;
@@ -77,7 +78,9 @@ int main(int argc, char** argv)
 {
 	auto default_dtype = caffe2::TypeMeta::Make<double>();
 	torch::set_default_dtype(default_dtype);
-	pidAutoTuner = new SACAgent(4, 256, 3, 1.0, 0.0);
+	param* parameters = (param*)malloc(sizeof(param));
+	parameters->config = new Config();
+	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, 1.0, 0.0);
 	trainingBuffer = new Buffer();
 	
 
@@ -118,11 +121,8 @@ int main(int argc, char** argv)
 	double fx = 1 / 1.0;
 	cv::flip(test, test, -1);
 
-
-	param* parameters = (param*)malloc(sizeof(param));
 	parameters->height = height;
 	parameters->width = width;
-	parameters->config = new Config();
 
 	sendComand(0x8, 0x0, fd); // Reset servos
 
@@ -138,19 +138,133 @@ int main(int argc, char** argv)
 	parameters->mutex = PTHREAD_MUTEX_INITIALIZER;
 	parameters->isTraining = false;
 
-	pthread_t panTid, tiltTid, detectTid, autoTuneTid;
-	pthread_create(&panTid, NULL, panThread, (void*)parameters);
+	pthread_t panTid, tiltTid, detectTid, autoTuneTid, nonPIDPanTID;
+	pthread_create(&nonPIDPanTID, NULL, nonPIDPanThread, (void*)parameters);
+	// pthread_create(&panTid, NULL, panThread, (void*)parameters);
 	// pthread_create(&tiltTid, NULL, tiltThread, (void*)parameters);
 	pthread_create(&detectTid, NULL, detectThread, (void*)parameters);
 	pthread_create(&autoTuneTid, NULL, autoTuneThread, (void*)parameters);
-	pthread_join(panTid, NULL);
-	// pthread_join(tiltTid, NULL);
+	// pthread_join(panTid, NULL);
+	// pthread_join(tiltTid, NULL);nonPIDPanTID
+	pthread_join(nonPIDPanTID, NULL);
 	pthread_join(detectTid, NULL);
 	pthread_join(autoTuneTid, NULL);
 
 
 	// Terminate child processes and cleanup windows
 	cv::destroyAllWindows();
+}
+
+void* nonPIDPanThread(void* args) {
+	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
+	param* parameters = (param*)args;
+
+	// PID* pan = parameters->pan;
+	ED* ShmPTR = parameters->ShmPTR;
+	int milis = 1000 / parameters->rate;
+	int fd = parameters->fd;
+	int angleX = 90;
+	int currentAngleX = 90;
+	int lastAngleX = 90;
+	bool programStart = true;
+	double lastTimeStep;
+	SD lastState;
+	ED lastPanData;
+
+	while (true) {
+		SD currentState;
+		TD trainData;
+		ED panData = ShmPTR[1];
+
+		if (!panData.dirty && !panData.isOld(lastTimeStep)) { // If its not old and not already read
+
+			lastTimeStep = panData.timestamp;
+
+			// State data timestep (n - 1)
+			currentState.objCenterOld = lastPanData.Obj;
+			currentState.frameCenterOld = lastPanData.Frame;
+			currentState.errorOld = lastPanData.error;
+			currentState.lastAngle = static_cast<double>(lastAngleX);
+
+			// State data timestep (n)
+			currentState.objCenter = panData.Obj;
+			currentState.frameCenter = panData.Frame;
+			currentState.error = panData.error;
+			currentState.currentAngle = static_cast<double>(currentAngleX);
+
+			double stateArray[parameters->config->numInput];
+			currentState.getStateArray(stateArray);
+
+			// Normalize and get new PID gains
+			torch::Tensor action = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
+
+			double newAngle = Utility::rescaleAction(action.data().item().toDouble(), 0.0, 180.0);
+
+			std::cout << "New pan angle: " << newAngle << std::endl;
+
+			trainData.done = panData.done;
+			trainData.reward = errorToReward(currentState.error, currentState.errorOld, parameters->width / 2, panData.done);
+			trainData.actions[0] = newAngle;
+
+			angleX = static_cast<int>(newAngle);
+			if (currentAngleX != angleX) {
+				sendComand(0x2, static_cast<unsigned char>(newAngle), fd);
+			}
+
+			lastAngleX = currentAngleX;
+			currentAngleX = angleX;
+
+			if (programStart) { // For when we dont have a lastState
+				programStart = false;
+				lastState = currentState;
+				lastPanData = panData;
+				goto sleep;
+			}
+			else {
+				trainData.nextState = currentState;
+				trainData.currentState = lastState;
+				lastState = currentState;
+				lastPanData = panData;
+			}
+		}
+		else {
+			// pan->update(0.0, 0);
+			goto sleep;
+		}
+
+		if (!parameters->isTraining) {
+
+			if (pthread_mutex_trylock(&lock_t) == 0) {
+
+				if (!parameters->isTraining) {
+
+					try {
+						if (trainingBuffer->size() == parameters->config->maxBufferSize) {
+							std::cout << "Sending a training request..." << std::endl;
+							parameters->isTraining = true;
+							pthread_cond_broadcast(&cond_t);
+						}
+						else {
+							trainingBuffer->push_back(trainData);
+						}
+					}
+					catch (...)
+					{
+						throw "Error in pan thread";
+					}
+				}
+
+				pthread_mutex_unlock(&lock_t);
+			}
+
+			pthread_mutex_unlock(&parameters->mutex);
+		}
+
+	sleep:
+		msleep(milis);
+	}
+
+	return NULL;
 }
 
 void* panThread(void* args) {
@@ -161,11 +275,13 @@ void* panThread(void* args) {
 	ED* ShmPTR = parameters->ShmPTR;
 	int milis = 1000 / parameters->rate;
 	int fd = parameters->fd;
-	int angleX;
+	int angleX = 90;
 	int currentAngleX = 90;
+	int lastAngleX = 90;
 	bool programStart = true;
 	double lastTimeStep;
 	SD lastState;
+	ED lastPanData;
 
 	pan->init();
 
@@ -179,51 +295,63 @@ void* panThread(void* args) {
 
 			lastTimeStep = panData.timestamp;
 
-			double state[4] = {
-				panData.Obj,
-				panData.Frame,
-				panData.error,
-				angleX
-			};
+			// State data timestep (n - 1)
+			currentState.objCenterOld = lastPanData.Obj;
+			currentState.frameCenterOld = lastPanData.Frame;
+			currentState.errorOld = lastPanData.error;
+			currentState.lastAngle = static_cast<double>(lastAngleX);
 
-			torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(state, { 1, 4 }, options));
+			// State data timestep (n)
+			currentState.objCenter = panData.Obj;
+			currentState.frameCenter = panData.Frame;
+			currentState.error = panData.error;
+			currentState.currentAngle = static_cast<double>(currentAngleX);
+
+			double stateArray[parameters->config->numInput];
+			currentState.getStateArray(stateArray);
+
+			// Normalize and get new PID gains
+			torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
 			auto actions_a = actions.accessor<double, 1>();
-
-			std::cout << "Here are the output rescaled Gains for pan: " << actions_a[0] << actions_a[1] << actions_a[2] << std::endl;
-			std::cout << "Here are the rescaled Gains for pan: " << Utility::rescaleAction(actions_a[0], 0.0, 1.0)  << Utility::rescaleAction(actions_a[1], 0.0, 1.0) << Utility::rescaleAction(actions_a[2], 0.0, 1.0) << std::endl;
-
-			// Normalize and get new weights
 			double newGains[3];
+
+
 			for (int i = 0; i < 3; i++) {
+				// newGains[i] = actions_a[i];
 				newGains[i] = Utility::rescaleAction(actions_a[i], 0.0, .1);
 			}
+
+			std::cout << "Here are the gains for pan: " << actions_a[0] << actions_a[1] << actions_a[2] << std::endl;
+			std::cout << "Here are the rescaled Gains for pan: " << newGains[0] << newGains[1] << newGains[2] << std::endl;
+
 			pan->setWeights(newGains[0], newGains[1], newGains[2]);
 
-			angleX = static_cast<int>(pan->update(panData.error, 0));
-			currentState.Obj = panData.Obj;
-			currentState.Frame = panData.Frame;
-			currentState.Angle = angleX;
-			currentState.error = panData.error;
 			trainData.done = panData.done;
-			trainData.reward = errorToReward(panData.error, parameters->width / 2, -1 * parameters->width / 2);
+			trainData.reward = errorToReward(currentState.error, currentState.errorOld, parameters->width / 2, panData.done );
 			pan->getWeights(trainData.actions);
+
+			angleX = static_cast<int>(pan->update(panData.error, 0));
 
 
 			if (currentAngleX != angleX) {
 				int mappedX = mapOutput(angleX, -90, 90, 0, 180);
 				sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
-				currentAngleX = angleX;
 			}
+
+			lastAngleX = currentAngleX;
+			currentAngleX = angleX;
 
 			if (programStart) { // For when we dont have a lastState
 				programStart = false;
 				lastState = currentState;
+				lastPanData = panData;
 				goto sleep;
 			}
 			else {
 				trainData.nextState = currentState;
 				trainData.currentState = lastState;
 				lastState = currentState;
+				lastPanData = panData;
 			}
 
 			if (trainData.done) {
@@ -281,9 +409,11 @@ void* tiltThread(void* args) {
 	int fd = parameters->fd;
 	bool programStart = true;
 	int angleY;
-	int currentAngleY = 90;
+	int currentAngleY = -90;
+	int lastAngleY = -90;
 	double lastTimeStep;
 	SD lastState;
+	ED lastTiltData;
 
 	tilt->init();
 
@@ -296,43 +426,63 @@ void* tiltThread(void* args) {
 
 			lastTimeStep = tiltData.timestamp;
 
-			double state[4] = {
-				tiltData.Obj,
-				tiltData.Frame,
-				tiltData.error,
-				angleY
-			};
+			// State data timestep (n - 1)
+			currentState.objCenterOld = lastTiltData.Obj;
+			currentState.frameCenterOld = lastTiltData.Frame;
+			currentState.errorOld = lastTiltData.error;
+			currentState.lastAngle = static_cast<double>(lastAngleY);
 
-			torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(state, { 1, 4 }, options));
-			auto actions_a = actions.accessor<double, 1>();
-			
-			// Normalize and get new weights
-			tilt->setWeights(Utility::rescaleAction(actions_a[0], 0.0, 1.0), Utility::rescaleAction(actions_a[1], 0.0, 1.0), Utility::rescaleAction(actions_a[2], 0.0, 1.0));
-			
-			angleY = static_cast<int>(tilt->update(tiltData.error, 0)) * -1;
-			currentState.Obj = tiltData.Obj;
-			currentState.Frame = tiltData.Frame;
-			currentState.Angle = angleY;
+			// State data timestep (n)
+			currentState.objCenter = tiltData.Obj;
+			currentState.frameCenter = tiltData.Frame;
 			currentState.error = tiltData.error;
+			currentState.currentAngle = static_cast<double>(currentAngleY);
+
+			// Normalize and get new PID gains
+			double stateArray[parameters->config->numInput];
+			currentState.getStateArray(stateArray);
+
+			torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
+			auto actions_a = actions.accessor<double, 1>();
+			double newGains[3];
+
+
+			for (int i = 0; i < 3; i++) {
+				//newGains[i] = actions_a[i];
+				newGains[i] = Utility::rescaleAction(actions_a[i], 0.0, .1);
+			}
+
+			std::cout << "Here are the gains for pan: " << actions_a[0] << actions_a[1] << actions_a[2] << std::endl;
+			std::cout << "Here are the rescaled Gains for pan: " << newGains[0] << newGains[1] << newGains[2] << std::endl;
+
+			tilt->setWeights(newGains[0], newGains[1], newGains[2]);
+
 			trainData.done = tiltData.done;
-			trainData.reward = errorToReward(tiltData.error, parameters->height / 2, -1 * parameters->height / 2);
+			trainData.reward = errorToReward(currentState.error, currentState.errorOld, parameters->height / 2, tiltData.done );
 			tilt->getWeights(trainData.actions);
 
+			angleY = static_cast<int>(tilt->update(tiltData.error, 0)) * -1;
+
+
 			if (currentAngleY != angleY) {
-				int mappedY = mapOutput(angleY, -90, 90, 0, 180);
-				sendComand(0x3, static_cast<unsigned char>(mappedY), fd);
-				currentAngleY = angleY;
+				int mappedX = mapOutput(angleY, -90, 90, 0, 180);
+				sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
 			}
+
+			lastAngleY = currentAngleY;
+			currentAngleY = angleY;
 
 			if (programStart) { // For when we dont have a lastState
 				programStart = false;
 				lastState = currentState;
+				lastTiltData = tiltData;
 				goto sleep;
 			}
 			else {
 				trainData.nextState = currentState;
 				trainData.currentState = lastState;
 				lastState = currentState;
+				lastTiltData = tiltData;
 			}
 
 			if (trainData.done) {

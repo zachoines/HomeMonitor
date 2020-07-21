@@ -12,7 +12,7 @@ private:
 	double _action_max, _action_min;
 	int _current_update = 0;
 	int _current_save_delay = 0;
-	int _max_save_delay = 100;
+	int _max_save_delay = 10;
 	int _max_delay = 2;
 	
 

@@ -22,6 +22,7 @@
 #include <malloc.h>
 #include <sys/mman.h>
 #include <errno.h>
+#include <cmath>
 
 // 3rd party libs
 #include <wiringPiI2C.h>
@@ -89,6 +90,10 @@ namespace Utility {
 		return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 	}
 
+	static double mapOutput(double x, double in_min, double in_max, double out_min, double out_max) {
+		return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+	}
+
 	// Return response data
 	static void sendComand(unsigned char command, unsigned char data, int fd) {
 		unsigned short finalCommand = (command << 8) + data;
@@ -108,9 +113,43 @@ namespace Utility {
 		return frame;
 	}
 
-	static double errorToReward(int error, int high, int low) {
-		double scaledError = static_cast<double>(mapOutput(error, low, high, 0, 1000)) / 1000.0;
-		return 1.0 - scaledError;
+	/* 
+		If done error: -2
+		Else reward is -1 to +1, plus additional reward bias for transitions that are good (and vic versa)
+		Bias is a exponential func from 0.0 to 1.0 
+	*/
+	static double errorToReward(int errorNew, int errorOld, int absMax, bool done) {
+
+		if (done) {
+			return -2.0;
+		}
+
+		// ABS Errors
+		errorOld = (errorOld < 0) ? (-errorOld) : (errorOld);
+		errorNew = (errorNew < 0) ? (-errorNew) : (errorNew);
+		
+		// Scale errors from 0.0 to 1.0
+		double errorOldScaled = static_cast<double>(errorOld) / static_cast<double>(absMax);
+		double errorNewScaled = static_cast<double>(errorNew) / static_cast<double>(absMax);
+		
+		// Score the errors
+		double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -1.0, 1.0);
+		double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -1.0, 1.0);
+
+		if (errorNewScore > errorOldScore) {
+			double percentBetter =  1.0 - abs(errorOldScore / errorNewScore);
+			double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)); // Exponential func from 0.0 to 1.0
+			return errorNewScore + bias;
+		}
+		else if (errorNewScore < errorOldScore) {
+			double percentWorse = 1.0 - abs(errorNewScore / errorOldScore);
+			double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0));
+
+			return errorNewScore - bias;
+		}
+		else {
+			return errorNewScore;
+		}
 	}
 
 	static double rescaleAction(double action, double min, double max) {
