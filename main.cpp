@@ -25,9 +25,6 @@
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
 #include <torch/torch.h>
-//#include <boost/interprocess/managed_shared_memory.hpp>
-//#include <boost/interprocess/containers/vector.hpp>
-//#include <boost/interprocess/allocators/allocator.hpp>
 #include <vector>
 #include <algorithm>
 
@@ -58,21 +55,43 @@ using namespace cv;
 using namespace std;
 using namespace Utility;
 
-void* tiltThread(void* args);
-void* panThread(void* args);
+// void* tiltThread(void* args);
+// void* panThread(void* args);
+void* panTiltThread(void* args);
 void* detectThread(void* args);
 void* autoTuneThread(void* args);
-void* nonPIDPanThread(void* args);
 
 ED eventDataArray[2];
-pthread_cond_t cond_t = PTHREAD_COND_INITIALIZER;
-pthread_mutex_t lock_t = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t trainBufferCond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t trainBufferLock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t stateDataLock = PTHREAD_MUTEX_INITIALIZER;
 
 SACAgent* pidAutoTuner = nullptr;
 cv::VideoCapture camera(0);
 torch::Device device(torch::kCPU);
-Buffer* trainingBuffer;
+TrainBuffer* trainingBuffer;
 
+
+Ptr<Tracker> createOpenCVTracker(int type) {
+	Ptr<Tracker> tracker;
+	switch (type)
+	{
+	case 0:
+		tracker = cv::TrackerCSRT::create();
+		break;
+	case 1:
+		tracker = cv::TrackerMOSSE::create();
+		break;
+	case 2:
+		tracker = cv::TrackerGOTURN::create();
+		break;
+	default:
+		tracker = cv::TrackerCSRT::create();
+		break;
+	}
+
+	return tracker;
+}
 
 int main(int argc, char** argv)
 {
@@ -81,9 +100,8 @@ int main(int argc, char** argv)
 	param* parameters = (param*)malloc(sizeof(param));
 	parameters->config = new Config();
 	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, 1.0, 0.0);
-	trainingBuffer = new Buffer();
+	trainingBuffer = new TrainBuffer();
 	
-
 	// Setup Torch
 	if (torch::cuda::is_available()) {
 		std::cout << "CUDA is available! Training on GPU." << std::endl;
@@ -121,8 +139,8 @@ int main(int argc, char** argv)
 	double fx = 1 / 1.0;
 	cv::flip(test, test, -1);
 
-	parameters->height = height;
-	parameters->width = width;
+	parameters->dims[0] = height;
+	parameters->dims[1] = width;
 
 	sendComand(0x8, 0x0, fd); // Reset servos
 
@@ -131,395 +149,216 @@ int main(int argc, char** argv)
 	PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
 
 	parameters->fd = fd;
-	parameters->ShmPTR = eventDataArray;
+	parameters->eventData = eventDataArray;
 	parameters->pan = pan;
 	parameters->tilt = tilt;
-	parameters->rate = 6; /* Updates per second */
-	parameters->mutex = PTHREAD_MUTEX_INITIALIZER;
+	parameters->rate = 7; /* Updates per second */
 	parameters->isTraining = false;
+	parameters->freshData = false;
 
-	pthread_t panTid, tiltTid, detectTid, autoTuneTid, nonPIDPanTID;
-	pthread_create(&nonPIDPanTID, NULL, nonPIDPanThread, (void*)parameters);
-	// pthread_create(&panTid, NULL, panThread, (void*)parameters);
-	// pthread_create(&tiltTid, NULL, tiltThread, (void*)parameters);
+	pthread_t panTid, tiltTid, detectTid, autoTuneTid, panTiltTid;
+
+	pthread_create(&panTiltTid, NULL, panTiltThread, (void*)parameters);
 	pthread_create(&detectTid, NULL, detectThread, (void*)parameters);
 	pthread_create(&autoTuneTid, NULL, autoTuneThread, (void*)parameters);
-	// pthread_join(panTid, NULL);
-	// pthread_join(tiltTid, NULL);nonPIDPanTID
-	pthread_join(nonPIDPanTID, NULL);
+
+	pthread_join(panTiltTid, NULL);
 	pthread_join(detectTid, NULL);
 	pthread_join(autoTuneTid, NULL);
-
 
 	// Terminate child processes and cleanup windows
 	cv::destroyAllWindows();
 }
 
-void* nonPIDPanThread(void* args) {
-	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
-	param* parameters = (param*)args;
-
-	// PID* pan = parameters->pan;
-	ED* ShmPTR = parameters->ShmPTR;
-	int milis = 1000 / parameters->rate;
-	int fd = parameters->fd;
-	int angleX = 90;
-	int currentAngleX = 90;
-	int lastAngleX = 90;
-	bool programStart = true;
-	double lastTimeStep;
-	SD lastState;
-	ED lastPanData;
-
-	while (true) {
-		SD currentState;
-		TD trainData;
-		ED panData = ShmPTR[1];
-
-		if (!panData.dirty && !panData.isOld(lastTimeStep)) { // If its not old and not already read
-
-			lastTimeStep = panData.timestamp;
-
-			// State data timestep (n - 1)
-			currentState.objCenterOld = lastPanData.Obj;
-			currentState.frameCenterOld = lastPanData.Frame;
-			currentState.errorOld = lastPanData.error;
-			currentState.lastAngle = static_cast<double>(lastAngleX);
-
-			// State data timestep (n)
-			currentState.objCenter = panData.Obj;
-			currentState.frameCenter = panData.Frame;
-			currentState.error = panData.error;
-			currentState.currentAngle = static_cast<double>(currentAngleX);
-
-			double stateArray[parameters->config->numInput];
-			currentState.getStateArray(stateArray);
-
-			// Normalize and get new PID gains
-			torch::Tensor action = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
-
-			double newAngle = Utility::rescaleAction(action.data().item().toDouble(), 0.0, 180.0);
-
-			std::cout << "New pan angle: " << newAngle << std::endl;
-
-			trainData.done = panData.done;
-			trainData.reward = errorToReward(currentState.error, currentState.errorOld, parameters->width / 2, panData.done);
-			trainData.actions[0] = newAngle;
-
-			angleX = static_cast<int>(newAngle);
-			if (currentAngleX != angleX) {
-				sendComand(0x2, static_cast<unsigned char>(newAngle), fd);
-			}
-
-			lastAngleX = currentAngleX;
-			currentAngleX = angleX;
-
-			if (programStart) { // For when we dont have a lastState
-				programStart = false;
-				lastState = currentState;
-				lastPanData = panData;
-				goto sleep;
-			}
-			else {
-				trainData.nextState = currentState;
-				trainData.currentState = lastState;
-				lastState = currentState;
-				lastPanData = panData;
-			}
-		}
-		else {
-			// pan->update(0.0, 0);
-			goto sleep;
-		}
-
-		if (!parameters->isTraining) {
-
-			if (pthread_mutex_trylock(&lock_t) == 0) {
-
-				if (!parameters->isTraining) {
-
-					try {
-						if (trainingBuffer->size() == parameters->config->maxBufferSize) {
-							std::cout << "Sending a training request..." << std::endl;
-							parameters->isTraining = true;
-							pthread_cond_broadcast(&cond_t);
-						}
-						else {
-							trainingBuffer->push_back(trainData);
-						}
-					}
-					catch (...)
-					{
-						throw "Error in pan thread";
-					}
-				}
-
-				pthread_mutex_unlock(&lock_t);
-			}
-
-			pthread_mutex_unlock(&parameters->mutex);
-		}
-
-	sleep:
-		msleep(milis);
-	}
-
-	return NULL;
-}
-
-void* panThread(void* args) {
+void* panTiltThread(void* args) {
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
 
 	PID* pan = parameters->pan;
-	ED* ShmPTR = parameters->ShmPTR;
-	int milis = 1000 / parameters->rate;
-	int fd = parameters->fd;
-	int angleX = 90;
-	int currentAngleX = 90;
-	int lastAngleX = 90;
-	bool programStart = true;
-	double lastTimeStep;
-	SD lastState;
-	ED lastPanData;
-
-	pan->init();
-
-
-	while (true) {
-		SD currentState;
-		TD trainData;
-		ED panData = ShmPTR[1];
-
-		if (!panData.dirty && !panData.isOld(lastTimeStep)) { // If its not old and not already read
-
-			lastTimeStep = panData.timestamp;
-
-			// State data timestep (n - 1)
-			currentState.objCenterOld = lastPanData.Obj;
-			currentState.frameCenterOld = lastPanData.Frame;
-			currentState.errorOld = lastPanData.error;
-			currentState.lastAngle = static_cast<double>(lastAngleX);
-
-			// State data timestep (n)
-			currentState.objCenter = panData.Obj;
-			currentState.frameCenter = panData.Frame;
-			currentState.error = panData.error;
-			currentState.currentAngle = static_cast<double>(currentAngleX);
-
-			double stateArray[parameters->config->numInput];
-			currentState.getStateArray(stateArray);
-
-			// Normalize and get new PID gains
-			torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
-			auto actions_a = actions.accessor<double, 1>();
-			double newGains[3];
-
-
-			for (int i = 0; i < 3; i++) {
-				// newGains[i] = actions_a[i];
-				newGains[i] = Utility::rescaleAction(actions_a[i], 0.0, .1);
-			}
-
-			std::cout << "Here are the gains for pan: " << actions_a[0] << actions_a[1] << actions_a[2] << std::endl;
-			std::cout << "Here are the rescaled Gains for pan: " << newGains[0] << newGains[1] << newGains[2] << std::endl;
-
-			pan->setWeights(newGains[0], newGains[1], newGains[2]);
-
-			trainData.done = panData.done;
-			trainData.reward = errorToReward(currentState.error, currentState.errorOld, parameters->width / 2, panData.done );
-			pan->getWeights(trainData.actions);
-
-			angleX = static_cast<int>(pan->update(panData.error, 0));
-
-
-			if (currentAngleX != angleX) {
-				int mappedX = mapOutput(angleX, -90, 90, 0, 180);
-				sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
-			}
-
-			lastAngleX = currentAngleX;
-			currentAngleX = angleX;
-
-			if (programStart) { // For when we dont have a lastState
-				programStart = false;
-				lastState = currentState;
-				lastPanData = panData;
-				goto sleep;
-			}
-			else {
-				trainData.nextState = currentState;
-				trainData.currentState = lastState;
-				lastState = currentState;
-				lastPanData = panData;
-			}
-
-			if (trainData.done) {
-				pan->init();
-			}
-		}
-		else {
-			// pan->update(0.0, 0);
-			goto sleep;
-		}
-
-		if (!parameters->isTraining) {
-
-			if (pthread_mutex_trylock(&lock_t) == 0) {
-
-				if (!parameters->isTraining) {
-
-					try {
-						if (trainingBuffer->size() == parameters->config->maxBufferSize) {
-							std::cout << "Sending a training request..." << std::endl;
-							parameters->isTraining = true;
-							pthread_cond_broadcast(&cond_t);
-						}
-						else {
-							trainingBuffer->push_back(trainData);
-						}
-					}
-					catch (...)
-					{
-						throw "Error in pan thread";
-					}
-				}
-
-				pthread_mutex_unlock(&lock_t);
-			}
-
-			pthread_mutex_unlock(&parameters->mutex);
-		}
-
-	sleep:
-		msleep(milis);
-	}
-
-	return NULL;
-}
-
-void* tiltThread(void* args) {
-	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
-
-	param* parameters = (param*)args;
-
 	PID* tilt = parameters->tilt;
-	ED* ShmPTR = parameters->ShmPTR;
-	int milis = 1000 / parameters->rate;
-	int fd = parameters->fd;
-	bool programStart = true;
-	int angleY;
-	int currentAngleY = -90;
-	int lastAngleY = -90;
-	double lastTimeStep;
-	SD lastState;
-	ED lastTiltData;
-
+	
+	pan->init();
 	tilt->init();
 
+	PID* pids[2] = {
+		tilt,
+		pan
+	};
+
+	int milis = 1000 / parameters->rate;
+	int fd = parameters->fd;
+	int newAngles[2] = { 90 };
+	int currentAngles[2] = { 90 };
+	int lastAngles[2] = { 90 };
+	bool programStart = true;
+
+	unsigned char commands[2];
+	commands[0] = 0x3;
+	commands[1] = 0x2;
+
+	SD lastState[2];
+	ED lastData[2];
+	double lastTimeStamp[2];
+
 	while (true) {
-		SD currentState;
-		TD trainData;
-		ED tiltData = ShmPTR[0];
+		SD currentState[2];
+		TD trainData[2];
+		ED eventData[2];
 
-		if (!tiltData.dirty && !tiltData.isOld(lastTimeStep)) { // If its not old and not already read
+		if (pthread_mutex_lock(&stateDataLock) == 0) { 
 
-			lastTimeStep = tiltData.timestamp;
+			eventData[0] = parameters->eventData[0];
+			eventData[1] = parameters->eventData[1];
 
-			// State data timestep (n - 1)
-			currentState.objCenterOld = lastTiltData.Obj;
-			currentState.frameCenterOld = lastTiltData.Frame;
-			currentState.errorOld = lastTiltData.error;
-			currentState.lastAngle = static_cast<double>(lastAngleY);
+			pthread_mutex_unlock(&stateDataLock);
+			
+			for (int i = 1; i < 2; i++) {
 
-			// State data timestep (n)
-			currentState.objCenter = tiltData.Obj;
-			currentState.frameCenter = tiltData.Frame;
-			currentState.error = tiltData.error;
-			currentState.currentAngle = static_cast<double>(currentAngleY);
+				if (eventData[i].timestamp == lastTimeStamp[i]) {
+					if (trainData[i].done) {
+						pids[i]->init();
+						sendComand(commands[i], static_cast<unsigned char>(90), fd);
+					}
 
-			// Normalize and get new PID gains
-			double stateArray[parameters->config->numInput];
-			currentState.getStateArray(stateArray);
+					goto sleep;
+				}
+					
+				if (trainData[i].done) {
+					pids[i]->init();
+					newAngles[i] = 90;
 
-			torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
-			auto actions_a = actions.accessor<double, 1>();
-			double newGains[3];
+					if (i == 0) {
+						newAngles[i] = newAngles[i] * -1;
+						// sendComand(0x8, 0x0, fd); // Reset servos once when done
+						sendComand(commands[i], static_cast<unsigned char>(90), fd);
+					}
+				}
+				
+				lastTimeStamp[i] = eventData[i].timestamp;
 
+				//// State data timestep (n - 1)
+				//currentState[i].objCenterOld = lastData[i].Obj;
+				//currentState[i].frameCenterOld = lastData[i].Frame;
+				//currentState[i].errorOld = lastData[i].error;
+				//currentState[i].lastAngle = static_cast<double>(lastAngles[i]);
 
-			for (int i = 0; i < 3; i++) {
-				//newGains[i] = actions_a[i];
-				newGains[i] = Utility::rescaleAction(actions_a[i], 0.0, .1);
-			}
+				//// State data timestep (n)
+				//currentState[i].objCenter = eventData[i].Obj;
+				//currentState[i].frameCenter = eventData[i].Frame;
+				//currentState[i].error = eventData[i].error;
+				//currentState[i].currentAngle = static_cast<double>(currentAngles[i]);
 
-			std::cout << "Here are the gains for pan: " << actions_a[0] << actions_a[1] << actions_a[2] << std::endl;
-			std::cout << "Here are the rescaled Gains for pan: " << newGains[0] << newGains[1] << newGains[2] << std::endl;
+				// State data timestep (n - 1)
+				currentState[i].objCenterOld = lastData[i].Obj;
+				currentState[i].frameCenterOld = lastData[i].Frame;
+				currentState[i].errorOld = lastData[i].error;
 
-			tilt->setWeights(newGains[0], newGains[1], newGains[2]);
+				// State data timestep (n)
+				currentState[i].objCenter = eventData[i].Obj;
+				currentState[i].frameCenter = eventData[i].Frame;
+				currentState[i].error = eventData[i].error;
 
-			trainData.done = tiltData.done;
-			trainData.reward = errorToReward(currentState.error, currentState.errorOld, parameters->height / 2, tiltData.done );
-			tilt->getWeights(trainData.actions);
+				// Update and save PID
+				static_cast<int>(pids[i]->update(eventData[i].error, 0));
+				double gains[3];
+				pids[i]->getWeights(gains);
+				currentState[i].p = gains[0];
+				currentState[i].i = gains[1];
+				currentState[i].d = gains[2];
+				
 
-			angleY = static_cast<int>(tilt->update(tiltData.error, 0)) * -1;
+				// If not end of State
+				if (!trainData[i].done) {
+					double stateArray[parameters->config->numInput];
+					currentState[i].getStateArray(stateArray);
 
+					// Normalize and get new PID gains
+					torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
+					auto actions_a = actions.accessor<double, 1>();
+					double scaledActions[parameters->config->numActions];
 
-			if (currentAngleY != angleY) {
-				int mappedX = mapOutput(angleY, -90, 90, 0, 180);
-				sendComand(0x2, static_cast<unsigned char>(mappedX), fd);
-			}
+					for (int a = 0; a < parameters->config->numActions; a++) {
+						scaledActions[a] = Utility::rescaleAction(actions_a[a], parameters->config->actionLow, parameters->config->actionHigh);
+						trainData[i].actions[a] = actions_a[a];
+					}
 
-			lastAngleY = currentAngleY;
-			currentAngleY = angleY;
+					// pids[i]->setWeights(newGains[0], newGains[1], newGains[2]);
+					// newAngles[i] = static_cast<int>(pan->update(eventData[i].error, 0));
 
-			if (programStart) { // For when we dont have a lastState
-				programStart = false;
-				lastState = currentState;
-				lastTiltData = tiltData;
-				goto sleep;
-			}
-			else {
-				trainData.nextState = currentState;
-				trainData.currentState = lastState;
-				lastState = currentState;
-				lastTiltData = tiltData;
-			}
+					// Tilt is flipped
+					// TODO: Determine rotation of servo in CONFIG
+					/*if (i == 0) {
+						newAngles[i] = scaledActions[i] * -1;
+					}*/
+					
+					newAngles[i] = scaledActions[i];
 
-			if (trainData.done) {
-				tilt->init();
-			}
+					if (currentAngles[i] != newAngles[i]) {
+
+						// int mappedAngle = mapOutput(newAngles[i], -75, 75, 0, 150);
+
+						sendComand(commands[i], static_cast<unsigned char>(newAngles[i]), fd);
+					}
+				}
+				
+				lastAngles[i] = currentAngles[i];
+				currentAngles[i] = newAngles[i];
+
+				// Done only once, for when we don't have a lastState
+				if (programStart) { 
+					
+					lastState[i] = currentState[i];
+					lastData[i] = eventData[i];
+
+					if (i == 1) {
+						programStart = false;
+						goto sleep;
+					}
+					else {
+						continue;
+					}
+					
+				}
+				else {
+					// Fill out train data entry
+					trainData[i].done = eventData[i].done;
+					trainData[i].reward = errorToReward(currentState[i].error, currentState[i].errorOld, parameters->dims[i] / 2, eventData[i].done);
+					// trainData[i].reward = errorToReward(eventData[i].error, parameters->dims[i] / 2, eventData[i].done);
+					trainData[i].nextState = currentState[i];
+					trainData[i].currentState = lastState[i];
+					lastState[i] = currentState[i];
+					lastData[i] = eventData[i];
+				}
+
+			}		
 		}
 		else {
-			// tilt->update(0.0, 0);
 			goto sleep;
 		}
 
-		if (!parameters->isTraining) {
+		if (!parameters->freshData) {
 
-			if (pthread_mutex_trylock(&lock_t) == 0) {
+			if (pthread_mutex_trylock(&trainBufferLock) == 0) {
 
-				if (!parameters->isTraining) {
-
-					try {
-						if (trainingBuffer->size() == parameters->config->maxBufferSize) {
-							std::cout << "Sending a training request..." << std::endl;
-							parameters->isTraining = true;
-							pthread_cond_broadcast(&cond_t);
-						}
-						else {
-							trainingBuffer->push_back(trainData);
-						}
+				try {
+					if (trainingBuffer->size() == parameters->config->minBufferSize) {
+						parameters->freshData = true;
+						pthread_cond_broadcast(&trainBufferCond);
 					}
-					catch (...)
-					{
-						throw "Error in tilt thread";
+					else {
+						// trainingBuffer->push_back(trainData[0]);
+						trainingBuffer->push_back(trainData[1]);
 					}
 				}
+				catch (...)
+				{
+					throw "Error in pan tilt thread";
+				}
 
-				pthread_mutex_unlock(&lock_t);
+				pthread_mutex_unlock(&trainBufferLock);
 			}
 
-			pthread_mutex_unlock(&lock_t);
+			pthread_mutex_unlock(&trainBufferLock);
 		}
 
 	sleep:
@@ -536,12 +375,13 @@ void* detectThread(void* args)
 	int fd = parameters->fd;
 
 	// user hyperparams
-	float recheckChance = 0.01;
-	bool useTracking = true;
-	bool draw = false;
-	bool showVideo = false;
-	bool cascadeDetector = true;
-	std::string target = "sheep";
+	float recheckChance = parameters->config->recheckChance;
+	int trackerType = parameters->config->trackerType;
+	bool useTracking = parameters->config->useTracking;
+	bool draw = parameters->config->draw;
+	bool showVideo = parameters->config->showVideo;
+	bool cascadeDetector = parameters->config->cascadeDetector;
+	std::string target = parameters->config->target;
 
 	// program state variables
 	bool rechecked = false;
@@ -552,9 +392,11 @@ void* detectThread(void* args)
 
 	// Create object tracker to optimize detection performance
 	cv::Rect2d roi;
-	Ptr<Tracker> tracker = cv::TrackerCSRT::create();
-	// Ptr<Tracker> tracker = cv::TrackerMOSSE::create();
-	// Ptr<Tracker> tracker = cv::TrackerGOTURN::create();
+
+	Ptr<Tracker> tracker;
+	if (useTracking) {
+		tracker = createOpenCVTracker(trackerType);
+	}
 
 	// Object center coordinates
 	int frameCenterX = 0;
@@ -613,10 +455,8 @@ void* detectThread(void* args)
 	while (true) {
 
 		if (isSearching) {
-			isSearching = false;
-
-			// TODO:: Perform search reutine
-			// sendComand(0x8, 0x0, fd); // Reset servos
+			// TODO:: Perform better search ruetine
+			// For now servo thread detects when done and sends a reset commman to servos
 		}
 
 		if (draw) {
@@ -645,6 +485,7 @@ void* detectThread(void* args)
 			}
 
 			if (isTracking) {
+				isSearching = false;
 
 				// Get the new tracking result
 				if (!tracker->update(frame, roi)) {
@@ -656,22 +497,20 @@ void* detectThread(void* args)
 
 				// Chance to revalidate object tracking quality
 				if (recheckChance >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
-					std::cout << "Rechecking tracking quality..." << std::endl;
+					std::cout << "Got g tracking quality..." << std::endl;
+					rechecked = true;
 					goto detect;
 				}
 
 			validated:
 				ED tilt;
 				ED pan;
+
 				// Determine object and frame centers
 				frameCenterX = static_cast<int>(frame.cols / 2);
 				frameCenterY = static_cast<int>(frame.rows / 2);
 				objX = roi.x + roi.width * 0.5;
 				objY = roi.y + roi.height * 0.5;
-
-				// Inform child process's threads of old data (race condition here, kinda washes out in end)
-				eventDataArray[0].dirty = true;
-				eventDataArray[1].dirty = true;
 
 				// Determine error
 				tilt.error = static_cast<double>(frameCenterY - objY);
@@ -688,9 +527,13 @@ void* detectThread(void* args)
 				pan.done = false;
 				tilt.done = false;
 
-				// Fresh data, now the child process's threads can read
-				eventDataArray[0] = tilt;
-				eventDataArray[1] = pan;
+				// Fresh data
+				if (pthread_mutex_lock(&stateDataLock) == 0) {
+					eventDataArray[0] = tilt;
+					eventDataArray[1] = pan;
+					
+					pthread_mutex_unlock(&stateDataLock);
+				}
 
 				// draw to frame
 				if (draw) {
@@ -723,27 +566,23 @@ void* detectThread(void* args)
 
 				if (result.found) {
 
+					// Update loop variants
+					lossCount = 0;
+					isSearching = false;
+
 					if (rechecked) {
+						rechecked = false;
 						goto validated;
 					}
+
+					ED tilt;
+					ED pan;
 
 					// Determine object and frame centers
 					frameCenterX = static_cast<int>(frame.cols / 2);
 					frameCenterY = static_cast<int>(frame.rows / 2);
 					objX = result.targetCenterX;
 					objY = result.targetCenterY;
-
-					ED tilt;
-					ED pan;
-					// Determine object and frame centers
-					frameCenterX = static_cast<int>(frame.cols / 2);
-					frameCenterY = static_cast<int>(frame.rows / 2);
-					objX = roi.x + roi.width * 0.5;
-					objY = roi.y + roi.height * 0.5;
-
-					// Inform child process's threads of old data (race condition here, kinda washes out in end)
-					eventDataArray[0].dirty = true;
-					eventDataArray[1].dirty = true;
 
 					// Determine error
 					tilt.error = static_cast<double>(frameCenterY - objY);
@@ -757,12 +596,16 @@ void* detectThread(void* args)
 					tilt.Obj = objY;
 					pan.Frame = frameCenterY;
 					tilt.Frame = frameCenterX;
-					pan.done = true;
-					tilt.done = true;
+					pan.done = false;
+					tilt.done = false;
 
-					// Fresh data, now the child process's threads can read
-					eventDataArray[0] = tilt;
-					eventDataArray[1] = pan;
+					// Fresh data
+					if (pthread_mutex_lock(&stateDataLock) == 0) {
+						eventDataArray[0] = tilt;
+						eventDataArray[1] = pan;
+
+						pthread_mutex_unlock(&stateDataLock);
+					}
 
 					if (useTracking) {
 
@@ -771,6 +614,7 @@ void* detectThread(void* args)
 						roi.width = result.boundingBox.width;
 						roi.height = result.boundingBox.height;
 
+						tracker = createOpenCVTracker(trackerType);
 						if (tracker->init(frame, roi)) {
 							isTracking = true;
 							std::cout << "initialized!!" << std::endl;
@@ -778,15 +622,50 @@ void* detectThread(void* args)
 						}
 					}
 				}
-				else {
+				else if (!isSearching){
 					lossCount++;
+					rechecked = false;
 
+					// Target is out of sight, inform PID's, model, and servos
 					if (lossCount >= lossCountMax) {
-						std::cout << "No target found" << std::endl;
+						
 						isSearching = true;
 						isTracking = false;
 						lossCount = 0;
-					}
+
+						ED tilt;
+						ED pan;
+						
+						// Object not on screen
+						frameCenterX = static_cast<int>(frame.cols / 2);
+						frameCenterY = static_cast<int>(frame.rows / 2);
+						objX = 0;
+						objY = 0;
+
+						// Max error
+						tilt.error = static_cast<double>(frameCenterY);
+						pan.error = static_cast<double>(frameCenterX);
+
+						// Error state
+						// Enter State data
+						double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
+						pan.timestamp = elapsed;
+						tilt.timestamp = elapsed;
+						pan.Obj = objX;
+						tilt.Obj = objY;
+						pan.Frame = frameCenterY;
+						tilt.Frame = frameCenterX;
+						pan.done = true;
+						tilt.done = true;
+
+						// Fresh data
+						if (pthread_mutex_lock(&stateDataLock) == 0) {
+							eventDataArray[0] = tilt;
+							eventDataArray[1] = pan;
+
+							pthread_mutex_unlock(&stateDataLock);
+						}
+					} 
 				}
 			}
 
@@ -816,21 +695,47 @@ void* detectThread(void* args)
 void* autoTuneThread(void* args)
 {
 	param* parameters = (param*)args;
+	int batchSize = parameters->config->batchSize;
+	int sessions = parameters->config->maxTrainingSessions;
+	int maxBufferSize = parameters->config->maxBufferSize;
+	int minBufferSize = parameters->config->minBufferSize;
+	TrainBuffer trainingBufferCopy;
 
 	while (true) {
-		pthread_mutex_lock(&lock_t);
-		while (!parameters->isTraining) {
-			pthread_cond_wait(&cond_t, &lock_t);
+		
+		pthread_mutex_lock(&trainBufferLock);
+		while (!parameters->freshData) {
+			pthread_cond_wait(&trainBufferCond, &trainBufferLock);
 		}
+
+		// Shrink working copy if too large
+		if (trainingBufferCopy.size() == maxBufferSize) {
+			erase(trainingBufferCopy, 0, minBufferSize - 1);
+		}
+
+		// Add elements to our working copy
+		trainingBufferCopy = append(trainingBufferCopy, *trainingBuffer);
+		trainingBuffer->clear();
+		parameters->freshData = false;
+		pthread_mutex_unlock(&trainBufferLock);
+
+		// Shuffle indexes
+		std::random_shuffle(trainingBufferCopy.begin(), trainingBufferCopy.end());
 
 		// Perform training session
-		for (int i = 0; i < parameters->config->maxTrainingSessions; i++) {
-			pidAutoTuner->update(parameters->config->batchSize, trainingBuffer);
-		}
+		for (int i = 0, m = 0; i < sessions, m < maxBufferSize; i++, m += batchSize - 1) {
 
-		trainingBuffer->clear();
-		parameters->isTraining = false;
-		pthread_mutex_unlock(&lock_t);
+			// Generate training sample
+			int n = m + batchSize - 1;
+			if (n < trainingBufferCopy.size()) {
+				TrainBuffer subBuf = slice(trainingBufferCopy, m, n);
+				pidAutoTuner->update(parameters->config->batchSize, &subBuf);
+			}
+			else {
+				parameters->isTraining = false;
+				break;
+			}
+		}	
 	}
 
 	return NULL;

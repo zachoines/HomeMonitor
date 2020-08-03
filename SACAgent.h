@@ -15,6 +15,8 @@ private:
 	int _max_save_delay = 10;
 	int _max_delay = 2;
 	
+	// For internal syncing of access
+	pthread_mutex_t _policyNetLock = PTHREAD_MUTEX_INITIALIZER;
 
 	QNetwork* _q_net1; 
 	QNetwork* _q_net2;
@@ -34,7 +36,7 @@ public:
 	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max = 1.0, double action_min = 0.0, double gamma = 0.99, double tau = 0.01, double alpha = 0.2, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
 	~SACAgent();
 
-	void update(int batchSize, Buffer* replayBuffer);
+	void update(int batchSize, TrainBuffer* replayBuffer);
 	torch::Tensor get_action(torch::Tensor state);
 
 	void save_checkpoint();

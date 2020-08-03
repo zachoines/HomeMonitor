@@ -6,14 +6,14 @@
 #include <torch/torch.h>
 #include "Normal.h"
 
-PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, double init_w, int log_std_min, int log_std_max) {
+PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, double init_w, int log_std_min, int log_std_max, double learning_rate) {
 	this->num_inputs = num_inputs;
 	this->num_actions = num_actions;
 	this->hidden_size = hidden_size;
 	this->init_w = init_w;
 	this->log_std_min = log_std_min;
 	this->log_std_max = log_std_max;
-	this->learning_rate = 1e-4;
+	this->learning_rate = learning_rate;
 
 	// Set network structure
 	linear1 = register_module("linear1", torch::nn::Linear(num_inputs, hidden_size));
@@ -33,15 +33,6 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, d
 	mean_Linear->bias.uniform_(-init_w, init_w);
 	log_std_linear->bias.uniform_(-init_w, init_w);
 
-	/*torch::nn::init::kaiming_normal_(linear1->weight);
-	torch::nn::init::kaiming_normal_(linear2->weight);
-	torch::nn::init::kaiming_normal_(mean_Linear->weight);
-	torch::nn::init::kaiming_normal_(log_std_linear->weight);
-	linear1->bias.zero_();
-	linear2->bias.zero_();
-	mean_Linear->bias.zero_();
-	log_std_linear->bias.zero_();*/
-	
 	torch::autograd::GradMode::set_enabled(true);
 
 	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));

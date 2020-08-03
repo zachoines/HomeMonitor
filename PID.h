@@ -8,6 +8,7 @@ class PID
 		double update(double error, int sleep = 0.0);
 		void getWeights(double w[3]);
 		void setWeights(double kP, double kI, double kD);
+		void getPID(double w[3]);
 
 	private:
 		double _max;

@@ -114,14 +114,16 @@ namespace Utility {
 	}
 
 	/* 
-		If done error: -2
-		Else reward is -1 to +1, plus additional reward bias for transitions that are good (and vic versa)
-		Bias is a exponential func from 0.0 to 1.0 
+		In short, reward ranges from -1.0 to 1.0
+		If done error: -1
+		Base reward from -0.5 to 0.5, plus additional bias for transitions that are good (and vic versa)
+		Bias is a exponential func from 0.0 to .50
+
 	*/
 	static double errorToReward(int errorNew, int errorOld, int absMax, bool done) {
 
 		if (done) {
-			return -2.0;
+			return -1.0;
 		}
 
 		// ABS Errors
@@ -133,23 +135,42 @@ namespace Utility {
 		double errorNewScaled = static_cast<double>(errorNew) / static_cast<double>(absMax);
 		
 		// Score the errors
-		double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -1.0, 1.0);
-		double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -1.0, 1.0);
+		double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -0.5, .5);
+		double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -0.5, .5);
 
 		if (errorNewScore > errorOldScore) {
 			double percentBetter =  1.0 - abs(errorOldScore / errorNewScore);
-			double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)); // Exponential func from 0.0 to 1.0
+			double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)) * 0.5; // Exponential func from 0.0 to .5
 			return errorNewScore + bias;
 		}
 		else if (errorNewScore < errorOldScore) {
 			double percentWorse = 1.0 - abs(errorNewScore / errorOldScore);
-			double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0));
+			double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0)) * 0.5;
 
 			return errorNewScore - bias;
 		}
 		else {
 			return errorNewScore;
 		}
+	}
+
+	static double errorToReward(int error, int absMax, bool done) {
+
+		if (done) {
+			return -1.0;
+		}
+
+		// ABS Error
+		error = (error < 0) ? (-error) : (error);
+
+		// Scale errors from 0.0 to 1.0
+		double errorScaled = static_cast<double>(error) / static_cast<double>(absMax);
+
+		// invert and scale from -1.0 to 1.0
+		double inverted = 1.0 - errorScaled;
+		double reward = mapOutput(inverted, 0.0, 1.0, -1.0, 1.0);
+
+		return reward;
 	}
 
 	static double rescaleAction(double action, double min, double max) {
@@ -173,6 +194,33 @@ namespace Utility {
 		}
 
 		return 0;
+	}
+
+	// delete sub-vector from m to n - 1. Indexes starts at 0.
+	template<typename T>
+	static void erase(std::vector<T> &v, int m, int n) {
+		auto first = v.begin() + m;
+		auto last = v.begin() + n + 1;
+		v.erase(first, last);
+	}
+
+	// Concatinates two vectors together
+	template<typename T>
+	static std::vector<T> append(std::vector<T> &r, std::vector<T> &l) {
+		std::vector<T> temp = r;
+		temp.insert(temp.end(), l.begin(), l.end());
+		
+		return temp;
+	}
+
+	// Obtain sub-vector from m to n - 1. Indexes starts at 0.
+	template<typename T>
+	static std::vector<T> slice(std::vector<T> const& v, int m, int n) {
+		auto first = v.cbegin() + m;
+		auto last = v.cbegin() + n + 1;
+
+		std::vector<T> vec(first, last);
+		return vec;
 	}
 }
 
