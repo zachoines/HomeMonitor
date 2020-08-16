@@ -48,14 +48,14 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
-    <IncludePath>$(IncludePath)</IncludePath>
-    <LibraryPath>/usr/include/opencv;/usr/include/;/usr/local/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/api/include/;/usr/include/boost;$(LibraryPath)</LibraryPath>
+    <IncludePath>/home/pi/pca9685/src/;$(IncludePath)</IncludePath>
+    <LibraryPath>/usr/include/;/usr/local/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/api/include/;/usr/local/include/opencv4;/usr/include/boost;$(LibraryPath)</LibraryPath>
     <SourcePath>$(SourcePath)</SourcePath>
     <RemoteCompileLocalCopyObjectFiles>true</RemoteCompileLocalCopyObjectFiles>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <Link>
-      <LibraryDependencies>boost_system;torch;torch_cpu;c10;wiringPi;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_tracking;opencv_video;opencv_videoio;opencv_dnn;raspicam;raspicam_cv;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
+      <LibraryDependencies>boost_system;torch;torch_cpu;c10;wiringPi;wiringPiPca9685;opencv_core;opencv_imgcodecs;opencv_objdetect;opencv_highgui;opencv_imgproc;opencv_tracking;opencv_video;opencv_videoio;opencv_dnn;pthread;jpeg;gcc_s;stdc++;tbb;rt;dl;m;z;png16;c</LibraryDependencies>
     </Link>
     <RemotePostBuildEvent>
       <Command>gpio export 17 out</Command>
@@ -75,6 +75,7 @@
     <ClCompile Include="CaffeDetector.cpp" />
     <ClCompile Include="CascadeDetector.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="ReplayBuffer.cpp" />
     <ClCompile Include="track.cpp" />
     <ClCompile Include="QNetwork.cpp" />
     <ClCompile Include="Normal.cpp" />
@@ -116,6 +117,7 @@
     <ClInclude Include="ObjectDetector.h" />
     <ClInclude Include="PID.h" />
     <ClInclude Include="PolicyNetwork.h" />
+    <ClInclude Include="ReplayBuffer.h" />
     <ClInclude Include="SACAgent.h" />
   </ItemGroup>
   <ItemGroup>
@@ -124,11 +126,12 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
       <CppLanguageStandard>c++17</CppLanguageStandard>
-      <AdditionalIncludeDirectories>/usr/local/include/opencv4/opencv2;/usr/local/include/opencv4;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/api/include/;/usr/include/boost/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>/usr/local/include/opencv4/opencv2;/usr/local/include/opencv4;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/;/home/pi/pytorch/build/lib.linux-armv7l-3.7/torch/include/torch/csrc/api/include/;/usr/local/include;/home/pi/pca9685/src/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DebugInformationFormat>FullDebug</DebugInformationFormat>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <CompileAs>CompileAsCpp</CompileAs>
+      <CompileAs>Default</CompileAs>
+      <AdditionalOptions>-Winline -pipe</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
@@ -137,7 +140,7 @@
       <NoExecStackRequired>false</NoExecStackRequired>
       <Relocation>false</Relocation>
       <FunctionBinding>false</FunctionBinding>
-      <SharedLibrarySearchPath>/usr/lib;usr/local/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
+      <SharedLibrarySearchPath>/usr/lib;/usr/local/lib;/usr/local/include;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

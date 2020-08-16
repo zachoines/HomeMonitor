@@ -21,31 +21,9 @@ struct EventData {
 	EventData() : done(false) {}
 } typedef ED;
 
-//struct StateData {
-//	double objCenter;
-//	double frameCenter;
-//	double error;
-//	double currentAngle;
-//	double objCenterOld;
-//	double frameCenterOld;
-//	double errorOld;
-//	double lastAngle;
-//
-//	double getStateArray(double state[8]) {
-//		state[0] = objCenter;
-//		state[1] = frameCenter;
-//		state[2] = error;
-//		state[3] = currentAngle;
-//		state[4] = objCenterOld;
-//		state[5] = frameCenterOld;
-//		state[6] = errorOld;
-//		state[7] = lastAngle;
-//	}
-//
-//} typedef SD;
-
-
 struct StateData {
+
+	double stateArray[3];
 	
 	double objCenter;
 	double frameCenter;
@@ -59,18 +37,17 @@ struct StateData {
 	double i;
 	double d;
 
-	double getStateArray(double state[7]) {
-		state[0] = objCenter;
-		state[1] = frameCenter;
-		// state[2] = error;
+	void setStateArray(double state[3]) {
+		for (int i = 0; i < 3; i++) {
+			stateArray[i] = state[i];
+		}
+	}
 
-		state[2] = objCenterOld;
-		state[3] = frameCenterOld;
-		// state[5] = errorOld;
+	void getStateArray(double state[3]) {
 
-		state[4] = p;
-		state[5] = i;
-		state[6] = d;
+		for (int i = 0; i < 3; i++) {
+			state[i] = stateArray[i];
+		}
 	}
 
 } typedef SD;
@@ -100,6 +77,7 @@ struct Config {
 	int minBufferSize;
 	int maxTrainingSessions;
 	int batchSize;
+	bool offPolicyTrain;
 
 	// Tracking Options
 	float recheckChance;
@@ -111,28 +89,51 @@ struct Config {
 	int lossCountMax;
 	std::string target;
 
+	// Servo options
+	double angleHigh;
+	double angleLow;
+	int updateRate;
+	bool invertX;
+	bool invertY;
+	bool useArduino;
+	unsigned char arduinoCommands[3];
+
 	// bounds
 	double actionHigh;
 	double actionLow;
 
 	Config() :
-		numActions(1),
-		numHidden(7),
-		numInput(7),
-		maxBufferSize(1024),
+
+		numActions(3),
+		numHidden(128),
+		numInput(3),
+
+		maxBufferSize(100000),
 		minBufferSize(128),
 		maxTrainingSessions(32),
 		batchSize(32),
+
 		recheckChance(0.05),
+		lossCountMax(10),
+		updateRate(10),
+		invertX(false),
+		invertY(true),
+
+		useArduino(false),
+		arduinoCommands({ 0x3, 0x2, 0x8 }),
+
 		trackerType(1),
 		useTracking(true),
 		draw(false),
 		showVideo(false),
 		cascadeDetector(true),
-		lossCountMax(20),
 		target("face"),
-		actionHigh(165.0),
-		actionLow(15.0)
+
+		actionHigh(10.0),
+		actionLow(0.0),
+		angleHigh(165.0),
+		angleLow(15.0),
+		offPolicyTrain(true)
 		{}
 } typedef cfg;
 

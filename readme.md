@@ -27,3 +27,6 @@
 	* include dir as /usr/include/boost
 	* import libs: 
 
+* Install a servo controller lib
+	* I use this [PCA965](https://github.com/Reinbert/pca9685) lib
+

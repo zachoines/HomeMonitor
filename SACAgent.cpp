@@ -27,8 +27,9 @@
 
 */
 
-SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max, double action_min, double gamma, double tau, double alpha, double q_lr, double p_lr, double a_lr)
+SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max, double action_min, bool alphaAdjuster, double gamma, double tau, double alpha, double q_lr, double p_lr, double a_lr)
 {
+	_self_adjusting_alpha = alphaAdjuster;
 	_num_inputs = num_inputs;
 	_num_actions = num_actions;
 	_action_max = action_max;
@@ -37,7 +38,6 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 	_gamma = gamma;
 	_tau = tau;
 	_alpha = torch::tensor(alpha);
-	// std::cout << "Here is the alpha " << _alpha << std::endl;
 	_a_lr = a_lr;
 	_q_lr = q_lr;
 	_p_lr = p_lr;
@@ -49,18 +49,27 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 	_target_q_net2 = new QNetwork(num_inputs, num_actions, num_hidden);
 	_policy_net = new PolicyNetwork(num_inputs, num_actions, num_hidden);
 
+	// _target_entropy = c10::Scalar(-1 * num_actions);
+	_target_entropy = -1 * num_actions;
+	
+
 	// Load last checkpoint if available
-	load_checkpoint();
+	if (load_checkpoint()) {
+
+	}
+	else {
+		_log_alpha = torch::log(_alpha);
+		_log_alpha.set_requires_grad(true);
+	}
+
+	if (_self_adjusting_alpha) {
+		// Auto Entropy adjustment variables
+		_alpha_optimizer = new torch::optim::Adam({ _log_alpha }, torch::optim::AdamOptions(a_lr));
+	}
 	
 	// Copy over params
 	_transfer_params_v2(*_q_net1, *_target_q_net1);
 	_transfer_params_v2(*_q_net2, *_target_q_net2);
-
-	// Auto Entropy adjustment variables
-	_target_entropy = c10::Scalar(-1 * num_actions);
-	_log_alpha = torch::zeros(1);
-	_log_alpha.set_requires_grad(true);
-	_alpha_optimizer = new torch::optim::Adam({_log_alpha}, torch::optim::AdamOptions(a_lr));
 
 }
 
@@ -155,10 +164,10 @@ void SACAgent::save_checkpoint()
 	_policy_net->save(PModelArchive);
 	PModelArchive.save_to(PModelFile);
 
-	torch::save(_alpha, AlphaFile);
+	torch::save(_log_alpha, AlphaFile);
 }
 
-void SACAgent::load_checkpoint()
+bool SACAgent::load_checkpoint()
 {
 	// Load from file if exists
 	std::string path = get_current_dir_name();
@@ -180,7 +189,11 @@ void SACAgent::load_checkpoint()
 		PModelArchive.load_from(PModelFile);
 		_policy_net->load(PModelArchive);
 
-		torch::load(_alpha, AlphaFile);
+		torch::load(_log_alpha, AlphaFile);
+		return true;
+	}
+	else {
+		return false;
 	}
 }
 
@@ -240,10 +253,10 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	// Prepare Training tensors
 	auto optionsDouble = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU, -1);
 	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, optionsDouble);
+	std::cout << "Here are the states: " << states_t << std::endl;
 	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, optionsDouble);
 	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, optionsDouble);
 	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, optionsDouble);
-	// std::cout << "Here are the rewards: " << rewards_t <<  std::endl;
 	at::Tensor dones_t = torch::from_blob(dones, { batchSize }, optionsDouble);
 
 	at::Tensor next = _policy_net->sample(next_states_t, batchSize);
@@ -290,9 +303,11 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 			_q_net2->forward(states_t, pred_actions_t)
 		);
 
+		std::cout << "Here Min Q:" << min_q.mean();
+		std::cout << ", mean log_pi: " << (_alpha * pred_log_pi_t).mean();
+
 		at::Tensor policy_loss = (_alpha * pred_log_pi_t - min_q).mean();
-		std::cout << "Policy Loss = " << policy_loss << std::endl;
-		// std::cout << "Here is the Min Q:" << min_q.mean() << std::endl;
+		std::cout << ", and Policy Loss: " << policy_loss << std::endl;
 		
 		if (pthread_mutex_lock(&_policyNetLock) == 0) {
 			_policy_net->optimizer->zero_grad();
@@ -306,7 +321,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 
 		// Copy over network params with averaging
 		_transfer_params_v2(*_q_net1, *_target_q_net1, true);
-		_transfer_params_v2(*_q_net2, *_target_q_net2, true);
+		_transfer_params_v2(*_q_net2, *_target_q_net2, true); 
 
 		if (_current_save_delay == _max_save_delay) {
 			_current_save_delay = 0;
@@ -319,14 +334,14 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 		_current_update++;
 	}
 
-	// Update temperature
 	// Update alpha temperature
-	at::Tensor alpha_loss = (_log_alpha * (-pred_log_pi_t - _target_entropy).detach()).mean();
-
-	_alpha_optimizer->zero_grad();
-	alpha_loss.backward();
-	_alpha_optimizer->step();
-	_alpha = _log_alpha.exp();
-	std::cout << "Current alpha: " << _alpha << std::endl;
-
+	if (_self_adjusting_alpha) {
+		
+		at::Tensor alpha_loss = (_log_alpha * (-pred_log_pi_t - _target_entropy).detach()).mean();
+		_alpha_optimizer->zero_grad();
+		alpha_loss.backward();
+		_alpha_optimizer->step();
+		_alpha = torch::exp(_log_alpha);
+		// std::cout << "Current alpha: " << _alpha << std::endl;
+	}
 }

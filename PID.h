@@ -9,6 +9,7 @@ class PID
 		void getWeights(double w[3]);
 		void setWeights(double kP, double kI, double kD);
 		void getPID(double w[3]);
+		void setWindupGaurd(double guard);
 
 	private:
 		double _max;
@@ -29,5 +30,7 @@ class PID
 		double _prevError;
 		double _integral;
 		double _dt;		
+
+		double _windup_guard;
 };
 

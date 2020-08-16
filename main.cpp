@@ -1,4 +1,4 @@
-// C++ libs
+﻿// C++ libs
 #include <iostream>
 #include <string>
 #include <vector>
@@ -48,28 +48,33 @@
 #include "util.h"
 #include "data.h"
 #include "SACAgent.h"
+#include "ReplayBuffer.h"
 
+// For Servos
+#include <pca9685.h>
+
+#define PIN_BASE 300
+#define MAX_PWM 4096
+#define HERTZ 50
 #define ARDUINO_ADDRESS 0x9
 
 using namespace cv;
 using namespace std;
 using namespace Utility;
 
-// void* tiltThread(void* args);
-// void* panThread(void* args);
 void* panTiltThread(void* args);
 void* detectThread(void* args);
 void* autoTuneThread(void* args);
 
 ED eventDataArray[2];
-pthread_cond_t trainBufferCond = PTHREAD_COND_INITIALIZER;
-pthread_mutex_t trainBufferLock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t trainCond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t trainLock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t stateDataLock = PTHREAD_MUTEX_INITIALIZER;
 
 SACAgent* pidAutoTuner = nullptr;
+ReplayBuffer* replayBuffer = nullptr;
 cv::VideoCapture camera(0);
 torch::Device device(torch::kCPU);
-TrainBuffer* trainingBuffer;
 
 
 Ptr<Tracker> createOpenCVTracker(int type) {
@@ -93,6 +98,7 @@ Ptr<Tracker> createOpenCVTracker(int type) {
 	return tracker;
 }
 
+
 int main(int argc, char** argv)
 {
 	auto default_dtype = caffe2::TypeMeta::Make<double>();
@@ -100,8 +106,8 @@ int main(int argc, char** argv)
 	param* parameters = (param*)malloc(sizeof(param));
 	parameters->config = new Config();
 	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, 1.0, 0.0);
-	trainingBuffer = new TrainBuffer();
-	
+	replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize);
+
 	// Setup Torch
 	if (torch::cuda::is_available()) {
 		std::cout << "CUDA is available! Training on GPU." << std::endl;
@@ -115,10 +121,34 @@ int main(int argc, char** argv)
 	if (wiringPiSetupGpio() == -1)
 		exit(1);
 
-	int fd = wiringPiI2CSetup(ARDUINO_ADDRESS);
-	if (fd == -1) {
-		throw "Failed to init I2C communication.";
+	int fd;
+	
+	if (parameters->config->useArduino) {
+		fd = wiringPiI2CSetup(ARDUINO_ADDRESS);
+		if (fd == -1) {
+			throw "Failed to init I2C communication.";
+		}
 	}
+	else {
+		// Setup PCA9685 at address 0x40
+		fd = pca9685Setup(PIN_BASE, 0x40, HERTZ);
+		if (fd < 0)
+		{
+			throw "Failed to init I2C communication.";
+		}
+
+		pca9685PWMReset(fd);
+	}
+
+	/* 
+	runServo(0, 180.0); // left
+	runServo(0, 90.0); // center
+	runServo(0, 0.0); // right
+
+	runServo(1, 180.0); // down
+	runServo(1, 90.0); // center
+	runServo(1, 0.0); // up
+	*/
 
 	if (!camera.isOpened())
 	{
@@ -135,14 +165,17 @@ int main(int argc, char** argv)
 	int height = test.rows;
 	int width = test.cols;
 
-	// Convert to Gray Scale and resize
-	double fx = 1 / 1.0;
-	cv::flip(test, test, -1);
-
 	parameters->dims[0] = height;
 	parameters->dims[1] = width;
 
-	sendComand(0x8, 0x0, fd); // Reset servos
+	if (parameters->config->useArduino) {
+		sendComand(0x8, 0x0, fd); // Reset servos
+	}
+	else {
+		runServo(0, 90);
+		runServo(1, 90);
+	}
+	
 
 	// Setup shared thread parameters
 	PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
@@ -152,7 +185,7 @@ int main(int argc, char** argv)
 	parameters->eventData = eventDataArray;
 	parameters->pan = pan;
 	parameters->tilt = tilt;
-	parameters->rate = 7; /* Updates per second */
+	parameters->rate = parameters->config->updateRate; 
 	parameters->isTraining = false;
 	parameters->freshData = false;
 
@@ -174,9 +207,15 @@ void* panTiltThread(void* args) {
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
 
+	bool invert[2] = {
+		parameters->config->invertY,
+		parameters->config->invertX
+	};
+	
+	// PIDs
 	PID* pan = parameters->pan;
 	PID* tilt = parameters->tilt;
-	
+
 	pan->init();
 	tilt->init();
 
@@ -185,25 +224,38 @@ void* panTiltThread(void* args) {
 		pan
 	};
 
+	// Servo/program state variables
+	int errorCounter = -1;
+	double previousErrors[2][2][3] = {
+		0.0
+	};
+
 	int milis = 1000 / parameters->rate;
 	int fd = parameters->fd;
-	int newAngles[2] = { 90 };
-	int currentAngles[2] = { 90 };
-	int lastAngles[2] = { 90 };
 	bool programStart = true;
+	bool addData = false;
 
+	// I2c commands for arduino
 	unsigned char commands[2];
-	commands[0] = 0x3;
-	commands[1] = 0x2;
+	commands[0] = parameters->config->arduinoCommands[0];
+	commands[1] = parameters->config->arduinoCommands[1];
 
+	// Previous state data
 	SD lastState[2];
 	ED lastData[2];
 	double lastTimeStamp[2];
+	double newAngles[2] = {
+			90.0
+	};
 
 	while (true) {
+
+		errorCounter = (errorCounter + 1) % 3;
+
 		SD currentState[2];
 		TD trainData[2];
 		ED eventData[2];
+		
 
 		if (pthread_mutex_lock(&stateDataLock) == 0) { 
 
@@ -211,61 +263,61 @@ void* panTiltThread(void* args) {
 			eventData[1] = parameters->eventData[1];
 
 			pthread_mutex_unlock(&stateDataLock);
+
 			
 			for (int i = 1; i < 2; i++) {
 
 				if (eventData[i].timestamp == lastTimeStamp[i]) {
-					if (trainData[i].done) {
-						pids[i]->init();
-						sendComand(commands[i], static_cast<unsigned char>(90), fd);
-					}
-
+					lastTimeStamp[i] = eventData[i].timestamp;
 					goto sleep;
 				}
+				else if (trainData[i].done) {
+					pan->init();
+					tilt->init();
 					
-				if (trainData[i].done) {
-					pids[i]->init();
-					newAngles[i] = 90;
-
-					if (i == 0) {
-						newAngles[i] = newAngles[i] * -1;
-						// sendComand(0x8, 0x0, fd); // Reset servos once when done
-						sendComand(commands[i], static_cast<unsigned char>(90), fd);
-					}
+					lastTimeStamp[i] = eventData[i].timestamp;
 				}
 				
-				lastTimeStamp[i] = eventData[i].timestamp;
-
-				//// State data timestep (n - 1)
-				//currentState[i].objCenterOld = lastData[i].Obj;
-				//currentState[i].frameCenterOld = lastData[i].Frame;
-				//currentState[i].errorOld = lastData[i].error;
-				//currentState[i].lastAngle = static_cast<double>(lastAngles[i]);
-
-				//// State data timestep (n)
-				//currentState[i].objCenter = eventData[i].Obj;
-				//currentState[i].frameCenter = eventData[i].Frame;
-				//currentState[i].error = eventData[i].error;
-				//currentState[i].currentAngle = static_cast<double>(currentAngles[i]);
-
-				// State data timestep (n - 1)
-				currentState[i].objCenterOld = lastData[i].Obj;
-				currentState[i].frameCenterOld = lastData[i].Frame;
-				currentState[i].errorOld = lastData[i].error;
-
-				// State data timestep (n)
-				currentState[i].objCenter = eventData[i].Obj;
-				currentState[i].frameCenter = eventData[i].Frame;
-				currentState[i].error = eventData[i].error;
-
-				// Update and save PID
-				static_cast<int>(pids[i]->update(eventData[i].error, 0));
-				double gains[3];
-				pids[i]->getWeights(gains);
-				currentState[i].p = gains[0];
-				currentState[i].i = gains[1];
-				currentState[i].d = gains[2];
 				
+				// Fill out the current state
+				lastTimeStamp[i] = eventData[i].timestamp;
+				previousErrors[i][0][errorCounter] = eventData[i].timestamp;
+				previousErrors[i][1][errorCounter] = (eventData[i].error / (static_cast<double>(parameters->dims[i]) / 2.0));
+				
+				int k, j;
+				double key;
+				double key2;
+				for (k = 1; k < 3; k++)
+				{
+					key = previousErrors[i][0][k];
+					key2 = previousErrors[i][1][k];
+					j = k - 1;
+
+					while (j >= 0 && previousErrors[i][1][j] > key)
+					{
+						previousErrors[i][1][j + 1] = previousErrors[i][1][j];
+						previousErrors[i][0][j + 1] = previousErrors[i][0][j];
+						j = j - 1;
+					}
+					previousErrors[i][0][j + 1] = key;
+					previousErrors[i][1][j + 1] = key2;
+				}
+
+				double state[3] = {
+					0.0
+				};
+
+				// Error, e(t) = y′(t) - y(t)
+				state[0] = previousErrors[i][1][2];
+
+				// First order error, e(t) - e(t−1)
+				state[1] = state[0] - previousErrors[i][1][1];
+
+				// Second order error, e(t) − 2∗e(t−1) + e(t−2)
+				state[2] = state[0] - 2.0 * previousErrors[i][1][1] + previousErrors[i][1][0];
+
+				currentState[i].setStateArray(state);
+
 
 				// If not end of State
 				if (!trainData[i].done) {
@@ -277,32 +329,35 @@ void* panTiltThread(void* args) {
 					auto actions_a = actions.accessor<double, 1>();
 					double scaledActions[parameters->config->numActions];
 
+					std::cout << "Here are the actions: ";
 					for (int a = 0; a < parameters->config->numActions; a++) {
 						scaledActions[a] = Utility::rescaleAction(actions_a[a], parameters->config->actionLow, parameters->config->actionHigh);
 						trainData[i].actions[a] = actions_a[a];
+						std::cout << ",  " << newAngles[i];
 					}
+					std::cout << std::endl;
 
-					// pids[i]->setWeights(newGains[0], newGains[1], newGains[2]);
-					// newAngles[i] = static_cast<int>(pan->update(eventData[i].error, 0));
-
-					// Tilt is flipped
-					// TODO: Determine rotation of servo in CONFIG
-					/*if (i == 0) {
-						newAngles[i] = scaledActions[i] * -1;
-					}*/
+					// Update PID, get new angle
+					pids[i]->setWeights(scaledActions[0], scaledActions[2], scaledActions[3]);
+					double errorBound = static_cast<double>(parameters->dims[i]) / 2;
+					// double scaledError = Utility::mapOutput(eventData[i].error, -errorBound, errorBound, 0.0, 2.0 * errorBound);
+					newAngles[i] = pids[i]->update(eventData[i].error / errorBound, 0);
+					std::cout << "New angle before clamp: " << newAngles[i] << std::endl;
+					newAngles[i] = Utility::mapOutput(newAngles[i], -75.0, 75.0, parameters->config->angleLow, parameters->config->angleHigh);
 					
-					newAngles[i] = scaledActions[i];
+					std::cout << "New angle: " << newAngles[i] << std::endl;	
+					
+					if (invert[i]) {
+						newAngles[i] = parameters->config->angleHigh - newAngles[i];
+					} 
 
-					if (currentAngles[i] != newAngles[i]) {
-
-						// int mappedAngle = mapOutput(newAngles[i], -75, 75, 0, 150);
-
-						sendComand(commands[i], static_cast<unsigned char>(newAngles[i]), fd);
+					if (parameters->config->useArduino) {
+						sendComand(commands[i], static_cast<unsigned char>(static_cast<int>(newAngles[i])), fd);
 					}
+					else {
+						runServo(i, newAngles[i]);
+					}		
 				}
-				
-				lastAngles[i] = currentAngles[i];
-				currentAngles[i] = newAngles[i];
 
 				// Done only once, for when we don't have a lastState
 				if (programStart) { 
@@ -322,8 +377,7 @@ void* panTiltThread(void* args) {
 				else {
 					// Fill out train data entry
 					trainData[i].done = eventData[i].done;
-					trainData[i].reward = errorToReward(currentState[i].error, currentState[i].errorOld, parameters->dims[i] / 2, eventData[i].done);
-					// trainData[i].reward = errorToReward(eventData[i].error, parameters->dims[i] / 2, eventData[i].done);
+					trainData[i].reward = errorToReward(eventData[i].error, lastData[i].error, parameters->dims[i] / 2, eventData[i].done);
 					trainData[i].nextState = currentState[i];
 					trainData[i].currentState = lastState[i];
 					lastState[i] = currentState[i];
@@ -336,31 +390,27 @@ void* panTiltThread(void* args) {
 			goto sleep;
 		}
 
+		if (!parameters->isTraining) {
+			replayBuffer->add(trainData[1]);
+		}
+		
 		if (!parameters->freshData) {
 
-			if (pthread_mutex_trylock(&trainBufferLock) == 0) {
+			if (pthread_mutex_lock(&trainLock) == 0) {
+				if (replayBuffer->size() >= parameters->config->minBufferSize) {
+					parameters->freshData = true;
 
-				try {
-					if (trainingBuffer->size() == parameters->config->minBufferSize) {
-						parameters->freshData = true;
-						pthread_cond_broadcast(&trainBufferCond);
+					if (!parameters->config->offPolicyTrain) {
+						parameters->isTraining = true;
 					}
-					else {
-						// trainingBuffer->push_back(trainData[0]);
-						trainingBuffer->push_back(trainData[1]);
-					}
+					
+					pthread_cond_broadcast(&trainCond);
 				}
-				catch (...)
-				{
-					throw "Error in pan tilt thread";
-				}
-
-				pthread_mutex_unlock(&trainBufferLock);
 			}
 
-			pthread_mutex_unlock(&trainBufferLock);
+			pthread_mutex_unlock(&trainLock);
 		}
-
+		
 	sleep:
 		msleep(milis);
 	}
@@ -388,7 +438,7 @@ void* detectThread(void* args)
 	bool isTracking = false;
 	bool isSearching = false;
 	int lossCount = 0;
-	int lossCountMax = 100;
+	int lossCountMax = parameters->config->lossCountMax;
 
 	// Create object tracker to optimize detection performance
 	cv::Rect2d roi;
@@ -399,12 +449,12 @@ void* detectThread(void* args)
 	}
 
 	// Object center coordinates
-	int frameCenterX = 0;
-	int frameCenterY = 0;
+	double frameCenterX = 0;
+	double frameCenterY = 0;
 
 	// Object coordinates
-	int objX = 0;
-	int objY = 0;
+	double objX = 0;
+	double objY = 0;
 
 	float f;
 	float FPS[16];
@@ -447,7 +497,6 @@ void* detectThread(void* args)
 		}
 	}
 
-
 	// HM::CaffeDetector cd(net, class_names);
 	HM::CascadeDetector cd;
 	HM::DetectionData result;
@@ -469,13 +518,13 @@ void* detectThread(void* args)
 
 			if (frame.empty())
 			{
-				std::cout << "Issue reading frame!" << std::endl;
+				// std::cout << "Issue reading frame!" << std::endl;
 				continue;
 			}
 
 			// Convert to Gray Scale and resize
 			double fx = 1 / 1.0;
-			cv::flip(frame, frame, -1);
+			// cv::flip(frame, frame, -1);
 			// cv::cvtColor(frame, frame, cv::COLOR_BGR2GRAY);
 			// cv::equalizeHist(gray, gray);
 			// resize(frame, frame, cv::Size(frame.cols / 2,  frame.rows / 2), fx, fx, cv::INTER_LINEAR);
@@ -490,14 +539,14 @@ void* detectThread(void* args)
 				// Get the new tracking result
 				if (!tracker->update(frame, roi)) {
 					isTracking = false;
-					std::cout << "Lost target!!" << std::endl;
+					// std::cout << "Lost target!!" << std::endl;
 					lossCount++;
 					goto detect;
 				}
 
 				// Chance to revalidate object tracking quality
 				if (recheckChance >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
-					std::cout << "Got g tracking quality..." << std::endl;
+					// std::cout << "Rechecking tracking quality..." << std::endl;
 					rechecked = true;
 					goto detect;
 				}
@@ -507,14 +556,14 @@ void* detectThread(void* args)
 				ED pan;
 
 				// Determine object and frame centers
-				frameCenterX = static_cast<int>(frame.cols / 2);
-				frameCenterY = static_cast<int>(frame.rows / 2);
+				frameCenterX = static_cast<double>(frame.cols) / 2.0;
+				frameCenterY = static_cast<double>(frame.rows) / 2.0;
 				objX = roi.x + roi.width * 0.5;
 				objY = roi.y + roi.height * 0.5;
 
 				// Determine error
-				tilt.error = static_cast<double>(frameCenterY - objY);
-				pan.error = static_cast<double>(frameCenterX - objX);
+				tilt.error = frameCenterY - objY;
+				pan.error = frameCenterX - objX;
 
 				// Enter State data
 				double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
@@ -522,8 +571,8 @@ void* detectThread(void* args)
 				tilt.timestamp = elapsed;
 				pan.Obj = objX;
 				tilt.Obj = objY;
-				pan.Frame = frameCenterY;
-				tilt.Frame = frameCenterX;
+				pan.Frame = frameCenterX;
+				tilt.Frame = frameCenterY;
 				pan.done = false;
 				tilt.done = false;
 
@@ -579,14 +628,14 @@ void* detectThread(void* args)
 					ED pan;
 
 					// Determine object and frame centers
-					frameCenterX = static_cast<int>(frame.cols / 2);
-					frameCenterY = static_cast<int>(frame.rows / 2);
-					objX = result.targetCenterX;
-					objY = result.targetCenterY;
+					frameCenterX = static_cast<double>(frame.cols) / 2.0;
+					frameCenterY = static_cast<double>(frame.rows) / 2.0;
+					objX = static_cast<double>(result.targetCenterX);
+					objY = static_cast<double>(result.targetCenterY);
 
-					// Determine error
-					tilt.error = static_cast<double>(frameCenterY - objY);
-					pan.error = static_cast<double>(frameCenterX - objX);
+					// Determine error (negative is too far left or too far above)
+					tilt.error = frameCenterY - objY;
+					pan.error = frameCenterX - objX;
 
 					// Other State data
 					double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
@@ -594,8 +643,8 @@ void* detectThread(void* args)
 					tilt.timestamp = elapsed;
 					pan.Obj = objX;
 					tilt.Obj = objY;
-					pan.Frame = frameCenterY;
-					tilt.Frame = frameCenterX;
+					pan.Frame = frameCenterX;
+					tilt.Frame = frameCenterY;
 					pan.done = false;
 					tilt.done = false;
 
@@ -617,12 +666,12 @@ void* detectThread(void* args)
 						tracker = createOpenCVTracker(trackerType);
 						if (tracker->init(frame, roi)) {
 							isTracking = true;
-							std::cout << "initialized!!" << std::endl;
-							std::cout << "Tracking Target..." << std::endl;
+							// std::cout << "initialized!!" << std::endl;
+							// std::cout << "Tracking Target..." << std::endl;
 						}
 					}
 				}
-				else if (!isSearching){
+				else {
 					lossCount++;
 					rechecked = false;
 
@@ -637,14 +686,14 @@ void* detectThread(void* args)
 						ED pan;
 						
 						// Object not on screen
-						frameCenterX = static_cast<int>(frame.cols / 2);
-						frameCenterY = static_cast<int>(frame.rows / 2);
+						frameCenterX = static_cast<double>(frame.cols) / 2.0;
+						frameCenterY = static_cast<double>(frame.rows) / 2.0;
 						objX = 0;
 						objY = 0;
 
 						// Max error
-						tilt.error = static_cast<double>(frameCenterY);
-						pan.error = static_cast<double>(frameCenterX);
+						tilt.error = frameCenterY;
+						pan.error = frameCenterX;
 
 						// Error state
 						// Enter State data
@@ -653,8 +702,8 @@ void* detectThread(void* args)
 						tilt.timestamp = elapsed;
 						pan.Obj = objX;
 						tilt.Obj = objY;
-						pan.Frame = frameCenterY;
-						tilt.Frame = frameCenterX;
+						pan.Frame = frameCenterX;
+						tilt.Frame = frameCenterY;
 						pan.done = true;
 						tilt.done = true;
 
@@ -662,6 +711,14 @@ void* detectThread(void* args)
 						if (pthread_mutex_lock(&stateDataLock) == 0) {
 							eventDataArray[0] = tilt;
 							eventDataArray[1] = pan;
+
+							if (parameters->config->useArduino) {
+								sendComand(0x8, 0x0, fd);
+							}
+							else {
+								runServo(0, 90.0);
+								runServo(1, 90.0);
+							}
 
 							pthread_mutex_unlock(&stateDataLock);
 						}
@@ -696,46 +753,38 @@ void* autoTuneThread(void* args)
 {
 	param* parameters = (param*)args;
 	int batchSize = parameters->config->batchSize;
-	int sessions = parameters->config->maxTrainingSessions;
-	int maxBufferSize = parameters->config->maxBufferSize;
-	int minBufferSize = parameters->config->minBufferSize;
-	TrainBuffer trainingBufferCopy;
-
+	bool offPolicy = parameters->config->offPolicyTrain;
+	
 	while (true) {
 		
-		pthread_mutex_lock(&trainBufferLock);
+		// Wait until there is enough data in the training buffer
 		while (!parameters->freshData) {
-			pthread_cond_wait(&trainBufferCond, &trainBufferLock);
+			pthread_cond_wait(&trainCond, &trainLock);
 		}
 
-		// Shrink working copy if too large
-		if (trainingBufferCopy.size() == maxBufferSize) {
-			erase(trainingBufferCopy, 0, minBufferSize - 1);
+
+		if (offPolicy) {
+			TrainBuffer batch = replayBuffer->sample();
+			pidAutoTuner->update(batchSize, &batch);
+			delay(1000);
+		} 
+		else {
+
+			TrainBuffer buff = replayBuffer->getCopy();
+			int numSamples = buff.size() / batchSize;
+			for (int sample = 1, m = 0; sample <= numSamples; sample += 1) {
+				int n = sample * batchSize - 1;
+				
+				TrainBuffer subBuf = slice(buff, m, n);
+				pidAutoTuner->update(batchSize, &subBuf);
+
+				m = n;
+			}
+
+			replayBuffer->clear();
+			parameters->isTraining = false;
+			parameters->freshData = false;
 		}
-
-		// Add elements to our working copy
-		trainingBufferCopy = append(trainingBufferCopy, *trainingBuffer);
-		trainingBuffer->clear();
-		parameters->freshData = false;
-		pthread_mutex_unlock(&trainBufferLock);
-
-		// Shuffle indexes
-		std::random_shuffle(trainingBufferCopy.begin(), trainingBufferCopy.end());
-
-		// Perform training session
-		for (int i = 0, m = 0; i < sessions, m < maxBufferSize; i++, m += batchSize - 1) {
-
-			// Generate training sample
-			int n = m + batchSize - 1;
-			if (n < trainingBufferCopy.size()) {
-				TrainBuffer subBuf = slice(trainingBufferCopy, m, n);
-				pidAutoTuner->update(parameters->config->batchSize, &subBuf);
-			}
-			else {
-				parameters->isTraining = false;
-				break;
-			}
-		}	
 	}
 
 	return NULL;

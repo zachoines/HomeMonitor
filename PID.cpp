@@ -1,6 +1,7 @@
 #include "PID.h"
 #include <chrono>
 #include <wiringPi.h>
+#include <iostream>
 
 PID::PID(double kP, double kI, double kD, double min, double max) {
 	_kP = kP;
@@ -9,6 +10,8 @@ PID::PID(double kP, double kI, double kD, double min, double max) {
 
 	_max = max;
 	_min = min;
+
+	_windup_guard = 20; 
 }
 
 void PID::init() {
@@ -43,7 +46,16 @@ double PID::update(double error, int sleep) {
 	_cP = error;
 
 	// integral
-	_cI += error * deltaTime;
+	_cI += error * deltaTime; 
+
+	// std::cout << "Here is the CI term: " << _cI << std::endl;
+	if (_cI < -_windup_guard) {
+		_cI = -_windup_guard;
+	}
+	else if (_cI > _windup_guard){
+		_cI = _windup_guard;
+	}
+		
 
 	// derivative
 	(deltaTime > 0) ? (_cD = (deltaError / deltaTime)) : (_cD = 0);
@@ -55,13 +67,14 @@ double PID::update(double error, int sleep) {
 	// Cross-mult, sum and return
 	double output = (_kP * _cP) + (_kI * _cI) + (_kD * _cD);
 	
+
 	if (output > _max) {
 		output = _max;
 	}
 	else if (output < _min) {
 		output = _min;
 	}
-		
+	
 	return output;
 }
 
@@ -70,6 +83,11 @@ void PID::getPID(double w[3])
 	w[0] = _cP;
 	w[1] = _cI;
 	w[2] = _cD;
+}
+
+void PID::setWindupGaurd(double guard)
+{
+	_windup_guard = guard;
 }
 
 void PID::getWeights(double w[3])

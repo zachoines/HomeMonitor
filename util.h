@@ -26,6 +26,8 @@
 
 // 3rd party libs
 #include <wiringPiI2C.h>
+#include <pca9685.h>
+#include <wiringPi.h>
 #include "opencv2/opencv.hpp"
 
 namespace Utility {
@@ -113,45 +115,132 @@ namespace Utility {
 		return frame;
 	}
 
-	/* 
-		In short, reward ranges from -1.0 to 1.0
-		If done error: -1
-		Base reward from -0.5 to 0.5, plus additional bias for transitions that are good (and vic versa)
-		Bias is a exponential func from 0.0 to .50
+	static int calcTicks(float impulseMs, int hertz = 50, int pwm = 4096)
+	{
+		float cycleMs = 1000.0f / hertz;
+		return (int)(pwm * impulseMs / cycleMs + 0.5f);
+	}
 
-	*/
-	static double errorToReward(int errorNew, int errorOld, int absMax, bool done) {
+	static int runServo(int servo, double angle, int Hz = 50, int pinBase = 300, double minAngle = 0.0, double maxAngle = 180.0, double minMs = 0.5, double maxMs = 2.5) {
+		double millis = Utility::mapOutput(angle, minAngle, maxAngle, minMs, maxMs);
+		int tick = calcTicks(millis, Hz);
+		pwmWrite(pinBase + servo, tick);
+	}
 
-		if (done) {
-			return -1.0;
+	static void calibrateServo(int Hz = 50, int pinBase = 300) {
+
+		int i, j = 1;
+		int pin;
+		float millis;
+
+		while (j)
+		{
+			printf("Enter servo pin [0-16]: ");
+			scanf("%d", &pin);
+
+			if (pin >= 0 && pin <= 16)
+			{
+				millis = 1.5f;
+				i = 1;
+
+				pwmWrite(pinBase + pin, calcTicks(millis, Hz));
+				printf("Servo %d is centered at %1.2f ms\n", pin, millis);
+
+				while (i)
+				{
+					printf("Enter milliseconds: ");
+					scanf("%f", &millis);
+
+					if (millis > 0 && millis <= 5)
+					{
+						pwmWrite(pinBase + pin, calcTicks(millis, Hz));
+						delay(1000);
+					}
+					else
+						i = 0;
+				}
+			}
+			else
+				j = 0;
 		}
+	}
+
+	
+	static double errorToReward(int errorNew, int errorOld, int absMax, bool done, bool alt = false) {
+		// https://link.springer.com/article/10.1007/s11276-019-02225-x#Sec6
+
+		/*if (done) {
+			return -.50;
+		}*/
+
+		// if (!alt) {
+		double r1, r2;
+
+		// Scals
+		double epsilon = 0.001;
+		double alpha1 = .50;
+		double alpha2 = .50;
 
 		// ABS Errors
 		errorOld = (errorOld < 0) ? (-errorOld) : (errorOld);
 		errorNew = (errorNew < 0) ? (-errorNew) : (errorNew);
-		
-		// Scale errors from 0.0 to 1.0
+
+		// convert from 0 to 1
 		double errorOldScaled = static_cast<double>(errorOld) / static_cast<double>(absMax);
 		double errorNewScaled = static_cast<double>(errorNew) / static_cast<double>(absMax);
-		
-		// Score the errors
-		double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -0.5, .5);
-		double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -0.5, .5);
 
-		if (errorNewScore > errorOldScore) {
-			double percentBetter =  1.0 - abs(errorOldScore / errorNewScore);
-			double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)) * 0.5; // Exponential func from 0.0 to .5
-			return errorNewScore + bias;
-		}
-		else if (errorNewScore < errorOldScore) {
-			double percentWorse = 1.0 - abs(errorNewScore / errorOldScore);
-			double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0)) * 0.5;
-
-			return errorNewScore - bias;
+		if (errorNewScaled < epsilon) {
+			r1 = 0.0; 
 		}
 		else {
-			return errorNewScore;
+			r1 = epsilon - errorNewScaled;
 		}
+
+		if (errorNewScaled <= errorOldScaled) {
+			r2 = 0.0;
+		}
+		else {
+			r2 = errorNewScaled - errorOldScaled;
+		}
+
+		return alpha1 * r1 + alpha2 * r2;
+		
+		//else {
+		//	/*
+		//		In short, reward ranges from -1.0 to 1.0
+		//		If done error: -1
+		//		Base reward from -0.5 to 0.5, plus additional bias for transitions that are good (and vic versa)
+		//		Bias is a exponential func from 0.0 to .50
+
+		//	*/
+
+		//	// ABS Errors
+		//	errorOld = (errorOld < 0) ? (-errorOld) : (errorOld);
+		//	errorNew = (errorNew < 0) ? (-errorNew) : (errorNew);
+
+		//	// Scale errors from 0.0 to 1.0
+		//	double errorOldScaled = static_cast<double>(errorOld) / static_cast<double>(absMax);
+		//	double errorNewScaled = static_cast<double>(errorNew) / static_cast<double>(absMax);
+
+		//	// Score the errors
+		//	double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -0.5, .5);
+		//	double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -0.5, .5);
+
+		//	if (errorNewScore > errorOldScore) {
+		//		double percentBetter = 1.0 - abs(errorOldScore / errorNewScore);
+		//		double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)) * 0.5; // Exponential func from 0.0 to .5
+		//		return errorNewScore + bias;
+		//	}
+		//	else if (errorNewScore < errorOldScore) {
+		//		double percentWorse = 1.0 - abs(errorNewScore / errorOldScore);
+		//		double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0)) * 0.5;
+
+		//		return errorNewScore - bias;
+		//	}
+		//	else {
+		//		return errorNewScore;
+		//	}	
+		//}	
 	}
 
 	static double errorToReward(int error, int absMax, bool done) {
@@ -174,7 +263,10 @@ namespace Utility {
 	}
 
 	static double rescaleAction(double action, double min, double max) {
-		return action * (max - min) / 2.0 + (max + min) / 2.0;
+		action = min + (action + 1.0) * 0.5 * (max - min);
+		action = std::clamp<double>(action, min, max);
+		return action;
+		// return action * (max - min) / 2.0 + (max + min) / 2.0;
 	}
 
 	static int printDirectory(const char* path) {
