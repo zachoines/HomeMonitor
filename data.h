@@ -105,13 +105,13 @@ struct Config {
 	Config() :
 
 		numActions(3),
-		numHidden(128),
+		numHidden(32),
 		numInput(3),
 
 		maxBufferSize(100000),
-		minBufferSize(128),
+		minBufferSize(512),
 		maxTrainingSessions(32),
-		batchSize(32),
+		batchSize(64),
 
 		recheckChance(0.05),
 		lossCountMax(10),

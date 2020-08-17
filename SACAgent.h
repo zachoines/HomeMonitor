@@ -3,6 +3,7 @@
 #include "data.h"
 #include "PolicyNetwork.h"
 #include "QNetwork.h"
+#include "ValueNetwork.h"
 
 class SACAgent
 {
@@ -22,8 +23,8 @@ private:
 
 	QNetwork* _q_net1; 
 	QNetwork* _q_net2;
-	QNetwork* _target_q_net1;
-	QNetwork* _target_q_net2;
+	ValueNetwork* _value_network;
+	ValueNetwork* _target_value_network;
 	PolicyNetwork* _policy_net;
 
 	torch::Tensor _log_alpha, _alpha;

@@ -84,6 +84,7 @@
     <ClCompile Include="PolicyNetwork.cpp" />
     <ClCompile Include="SACAgent.cpp" />
     <ClCompile Include="util.h" />
+    <ClCompile Include="ValueNetwork.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="goturn.caffemodel">
@@ -119,6 +120,7 @@
     <ClInclude Include="PolicyNetwork.h" />
     <ClInclude Include="ReplayBuffer.h" />
     <ClInclude Include="SACAgent.h" />
+    <ClInclude Include="ValueNetwork.h" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />

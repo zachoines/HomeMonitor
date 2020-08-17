@@ -68,5 +68,5 @@ torch::Tensor PolicyNetwork::sample(torch::Tensor state, int batchSize, double e
 	action = torch::tanh(z);
 	log_pi = normal.log_prob(z) - torch::log(1 - torch::add(torch::pow(action, 2), epsilon));
 
-	return torch::cat({ { action }, {log_pi} }, 0);
+	return torch::cat({ { action }, {log_pi}, { mean }, { std }, { z }}, 0);
 }
