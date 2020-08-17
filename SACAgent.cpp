@@ -274,8 +274,6 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	at::Tensor next_mean = reshapedResult[2];
 	at::Tensor next_std = reshapedResult[3];
 	at::Tensor next_z_values = reshapedResult[4];
-	std::cout << "Here here are the next means: " << next_mean << std::endl;
-	std::cout << "Here here are the next z's: " << next_z_values << std::endl;
 	next_log_pi_t = next_log_pi_t.sum(1, true);
 
 	// Update alpha temperature
@@ -297,10 +295,9 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	// Training the Q-Value Function
 	at::Tensor target_values = _target_value_network->forward(next_states_t);
 	at::Tensor target_q_values = torch::unsqueeze(rewards_t, 1) + torch::unsqueeze(1.0 - dones_t, 1) * _gamma * target_values;
-	std::cout << "Here here are the target q values: " << target_q_values << std::endl;
 	
 	at::Tensor q_value_loss1 = torch::nn::functional::mse_loss(predicted_q_value1, target_q_values.detach());
-	at::Tensor q_value_loss2 = torch::nn::functional::mse_loss(predicted_q_value1, target_q_values.detach());
+	at::Tensor q_value_loss2 = torch::nn::functional::mse_loss(predicted_q_value2, target_q_values.detach());
 
 	// Training Value Function
 	at::Tensor predicted_new_q_value = torch::min(predicted_q_value1, predicted_q_value2);
@@ -335,15 +332,12 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 		_current_update = 0;
 
 		// Train Policy Network 
-		at::Tensor advantages = predicted_new_q_value - predicted_values.detach();
-		std::cout << "Here are the advantages: " << advantages << std::endl;
-		at::Tensor policy_loss = (_alpha * next_log_pi_t - advantages).mean();
+		at::Tensor advantages = torch::min(_q_net1->forward(states_t, actions_t), _q_net2->forward(states_t, actions_t)) - predicted_values.detach();
+		at::Tensor policy_loss = (_alpha * next_log_pi_t.sum(1, true) - advantages).mean();
 
 		// Regularization
 		at::Tensor mean_reg = 1e-3 * next_mean.pow(2).sum(1, true).mean();
 		at::Tensor std_reg = 1e-3 * next_std.pow(2).sum(1, true).mean();
-
-		std::cout << "Here is the mean and std regs: " << mean_reg << ", " << std_reg << std::endl;
 		// at::Tensor z_value_reg = 1e-3 * next_z_values.pow(2).sum(-1).mean();
 
 		at::Tensor actor_reg = mean_reg + std_reg;

@@ -329,23 +329,20 @@ void* panTiltThread(void* args) {
 					auto actions_a = actions.accessor<double, 1>();
 					double scaledActions[parameters->config->numActions];
 
-					std::cout << "Here are the actions: ";
 					for (int a = 0; a < parameters->config->numActions; a++) {
 						scaledActions[a] = Utility::rescaleAction(actions_a[a], parameters->config->actionLow, parameters->config->actionHigh);
 						trainData[i].actions[a] = actions_a[a];
-						std::cout << ",  " << newAngles[i];
 					}
-					std::cout << std::endl;
 
 					// Update PID, get new angle
 					pids[i]->setWeights(scaledActions[0], scaledActions[2], scaledActions[3]);
 					double errorBound = static_cast<double>(parameters->dims[i]) / 2;
 					// double scaledError = Utility::mapOutput(eventData[i].error, -errorBound, errorBound, 0.0, 2.0 * errorBound);
 					newAngles[i] = pids[i]->update(eventData[i].error / errorBound, 0);
-					std::cout << "New angle before clamp: " << newAngles[i] << std::endl;
+					// std::cout << "New angle before clamp: " << newAngles[i] << std::endl;
 					newAngles[i] = Utility::mapOutput(newAngles[i], -75.0, 75.0, parameters->config->angleLow, parameters->config->angleHigh);
 					
-					std::cout << "New angle: " << newAngles[i] << std::endl;	
+					// std::cout << "New angle: " << newAngles[i] << std::endl;	
 					
 					if (invert[i]) {
 						newAngles[i] = parameters->config->angleHigh - newAngles[i];
@@ -764,7 +761,7 @@ void* autoTuneThread(void* args)
 
 
 		if (offPolicy) {
-			TrainBuffer batch = replayBuffer->sample();
+			TrainBuffer batch = replayBuffer->sample(batchSize);
 			pidAutoTuner->update(batchSize, &batch);
 			delay(1000);
 		} 
