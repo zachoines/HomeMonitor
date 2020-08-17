@@ -253,13 +253,12 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	// Prepare Training tensors
 	auto optionsDouble = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU, -1);
 	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, optionsDouble);
-	std::cout << "Here are the states: " << states_t << std::endl;
 	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, optionsDouble);
 	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, optionsDouble);
 	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, optionsDouble);
 	at::Tensor dones_t = torch::from_blob(dones, { batchSize }, optionsDouble);
 
-	at::Tensor next = _policy_net->sample(next_states_t, batchSize);
+	at::Tensor next = _policy_net->sample(states_t, batchSize);
 	at::Tensor reshapedResult = next.view({ 2, batchSize, _num_actions });
 	at::Tensor next_actions_t = reshapedResult[0];
 	at::Tensor next_log_pi_t = reshapedResult[1];
@@ -303,11 +302,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 			_q_net2->forward(states_t, pred_actions_t)
 		);
 
-		std::cout << "Here Min Q:" << min_q.mean();
-		std::cout << ", mean log_pi: " << (_alpha * pred_log_pi_t).mean();
-
 		at::Tensor policy_loss = (_alpha * pred_log_pi_t - min_q).mean();
-		std::cout << ", and Policy Loss: " << policy_loss << std::endl;
 		
 		if (pthread_mutex_lock(&_policyNetLock) == 0) {
 			_policy_net->optimizer->zero_grad();
