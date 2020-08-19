@@ -11,7 +11,7 @@ PID::PID(double kP, double kI, double kD, double min, double max) {
 	_max = max;
 	_min = min;
 
-	_windup_guard = 20; 
+	_windup_guard = 100; 
 }
 
 void PID::init() {
@@ -48,7 +48,6 @@ double PID::update(double error, int sleep) {
 	// integral
 	_cI += error * deltaTime; 
 
-	// std::cout << "Here is the CI term: " << _cI << std::endl;
 	if (_cI < -_windup_guard) {
 		_cI = -_windup_guard;
 	}

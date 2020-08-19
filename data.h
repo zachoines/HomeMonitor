@@ -24,18 +24,6 @@ struct EventData {
 struct StateData {
 
 	double stateArray[3];
-	
-	double objCenter;
-	double frameCenter;
-	double error;
-
-	double objCenterOld;
-	double frameCenterOld;
-	double errorOld;
-	
-	double p;
-	double i;
-	double d;
 
 	void setStateArray(double state[3]) {
 		for (int i = 0; i < 3; i++) {
@@ -108,14 +96,14 @@ struct Config {
 		numHidden(32),
 		numInput(3),
 
-		maxBufferSize(100000),
-		minBufferSize(512),
+		maxBufferSize(10000),
+		minBufferSize(256),
 		maxTrainingSessions(32),
-		batchSize(64),
+		batchSize(32),
 
 		recheckChance(0.05),
 		lossCountMax(10),
-		updateRate(10),
+		updateRate(20),
 		invertX(false),
 		invertY(true),
 

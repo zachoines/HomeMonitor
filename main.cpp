@@ -265,7 +265,7 @@ void* panTiltThread(void* args) {
 			pthread_mutex_unlock(&stateDataLock);
 
 			
-			for (int i = 1; i < 2; i++) {
+			for (int i = 0; i < 2; i++) {
 
 				if (eventData[i].timestamp == lastTimeStamp[i]) {
 					lastTimeStamp[i] = eventData[i].timestamp;
