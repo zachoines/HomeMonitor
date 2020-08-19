@@ -62,28 +62,126 @@ SACAgent::~SACAgent() {
 	delete _target_value_network;
 }
 
-void SACAgent::_transfer_params_v1(torch::nn::Module& from, torch::nn::Module& to) {
-	// char readBuffer[65536];
-	std::stringstream stream("...");
-	_save_to(from, stream);
-	_load_from(to, stream);
+int SACAgent::sync(bool parent, double* data)
+{
+	if (parent) {
+		int counter = 0;
+
+		counter = this->_load_from_array(*_q_net1, data, counter);
+		counter = this->_load_from_array(*_q_net2, data, counter);
+		counter = this->_load_from_array(*_policy_net, data, counter);
+		counter = this->_load_from_array(*_value_network, data, counter);
+		counter = this->_load_from_array(*_target_value_network, data, counter);
+		counter = this->_load_from_array(_log_alpha, data, counter);
+
+		return counter;
+	}
+	else {
+		int counter = 0;
+
+		counter = this->_save_to_array(*_q_net1, data, counter);
+		counter = this->_save_to_array(*_q_net2, data, counter);
+		counter = this->_save_to_array(*_policy_net, data, counter);
+		counter = this->_save_to_array(*_value_network, data, counter);
+		counter = this->_save_to_array(*_target_value_network, data, counter);
+		counter = this->_save_to_array(_log_alpha, data, counter);
+
+		return counter;
+	}
 }
 
-void SACAgent::_save_to(torch::nn::Module& module, std::stringstream& fd) {
-	
+int SACAgent::_save_to_array(torch::nn::Module& from, double* address, int index) {
 	torch::autograd::GradMode::set_enabled(false);
-	torch::serialize::OutputArchive archive;
-	auto params = module.named_parameters(true /*recurse*/);
-	auto buffers = module.named_buffers(true /*recurse*/);
+
+	auto params = from.named_parameters(true);
+	auto buffers = from.named_buffers(true);
+	
 	for (const auto& val : params) {
-		archive.write(val.key(), val.value());
+		
+		torch::Tensor value = val.value().clone().detach();
+		value = torch::flatten(value);
+
+		int size = value.size(-1);
+		for (int i = 0; i < size; i++) {
+			address[index] = value[i].item().toDouble();
+			index++;
+		}
 	}
+	
 	for (const auto& val : buffers) {
-		archive.write(val.key(), val.value(), /*is_buffer*/ true);
+
+		torch::Tensor value = val.value().clone().detach();	
+		value = torch::flatten(value);
+
+		int size = value.size(-1);
+		for (int i = 0; i < size; i++) {
+			address[index] = value[i].item().toDouble();
+			index++;
+		}
 	}
 
-	archive.save_to(fd);
 	torch::autograd::GradMode::set_enabled(true);
+	return index;
+}
+
+int SACAgent::_save_to_array(torch::Tensor& from, double* address, int index) {
+	torch::autograd::GradMode::set_enabled(false);
+
+	address[index] = from.data().item().toDouble();
+	index++;
+
+	torch::autograd::GradMode::set_enabled(true);
+	return index;
+}
+
+int SACAgent::_load_from_array(torch::nn::Module& to, double* address, int index) {
+	auto optionsDouble = torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU, -1);
+	torch::autograd::GradMode::set_enabled(false);
+
+	auto params = to.named_parameters(true);
+	auto buffers = to.named_buffers(true);
+	for (const auto& val : params) {
+
+		int size = val.value().numel();
+
+		double copy[size];
+
+		for (int i = 0; i < size; i++) {
+			copy[i] = address[index];
+			index++;
+		}
+
+		params[val.key()].data().copy_(torch::from_blob(copy, val.value().data().sizes(), optionsDouble));
+
+	}
+	
+	for (const auto& val : buffers) {
+
+		int size = val.value().numel();
+
+		double copy[size];
+
+		for (int i = 0; i < size; i++) {
+			copy[i] = address[index];
+			index++;
+		}
+
+		buffers[val.key()].data().copy_(torch::from_blob(copy, val.value().data().sizes(), optionsDouble));
+
+	}
+
+	torch::autograd::GradMode::set_enabled(true);
+	return index;
+}
+
+int SACAgent::_load_from_array(torch::Tensor& to, double* address, int index) {
+	torch::autograd::GradMode::set_enabled(false);
+
+	to.data().copy_(torch::tensor(address[index]));
+
+	torch::autograd::GradMode::set_enabled(true);
+	index++;
+	return index;
 }
 
 void SACAgent::_transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing) {
@@ -104,22 +202,6 @@ void SACAgent::_transfer_params_v2(torch::nn::Module& from, torch::nn::Module& t
 	}
 
 	torch::autograd::GradMode::set_enabled(true);
-}
-
-void SACAgent::_load_from(torch::nn::Module& module, std::stringstream& fd) {
-	// torch::autograd::GradMode::set_enabled(false);
-	torch::serialize::InputArchive archive;
-	archive.load_from(fd);
-	torch::AutoGradMode enable_grad(false);
-	auto params = module.named_parameters(true);
-	auto buffers = module.named_buffers(true);
-	for (auto& val : params) {
-		archive.read(val.key(), val.value());
-	}
-	for (auto& val : buffers) {
-		archive.read(val.key(), val.value(), true);
-	}
-	// torch::autograd::GradMode::set_enabled(true);
 }
 
 void SACAgent::save_checkpoint()
@@ -284,7 +366,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 		alpha_loss.backward();
 		_alpha_optimizer->step();
 		_alpha = torch::exp(_log_alpha);
-		std::cout << "Current alpha: " << _alpha << std::endl;
+		// std::cout << "Current alpha: " << _alpha << std::endl;
 	}
 	
 	// Estimated Q-Values
@@ -371,3 +453,4 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	}
 
 }
+

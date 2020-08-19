@@ -2,12 +2,26 @@
 #include <vector>
 #include <random>
 #include <iterator>
+#include "data.h"
+#include "util.h"
 
+// Boost imports
+#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/containers/vector.hpp>
+#include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/sync/scoped_lock.hpp>
+#include <boost/interprocess/sync/named_mutex.hpp>
 
-ReplayBuffer::ReplayBuffer(int maxBufferSize)
+ReplayBuffer::ReplayBuffer(int maxBufferSize, SharedBuffer * buffer)
 {
-	_trainingBuffer = new TrainBuffer();
-	_trainBufferLock = PTHREAD_MUTEX_INITIALIZER;
+
+	_trainingBuffer = buffer;
+
+	// Setup interprocess mutex
+	_mutex = new boost::interprocess::named_mutex(boost::interprocess::open_or_create, "ReplayBufferMutex");
+
+	_bufferIndex = _trainingBuffer->size() % maxBufferSize;
+
 	_maxBufferSize = maxBufferSize;
 
 	// Create a random device and use it to generate a random seed
@@ -17,112 +31,62 @@ ReplayBuffer::ReplayBuffer(int maxBufferSize)
 	_myRandomEngine.seed(seed);
 }
 
+ReplayBuffer::~ReplayBuffer() {
+	boost::interprocess::named_mutex::remove("ReplayBufferMutex");
+	delete _mutex;
+}
+
 TrainBuffer ReplayBuffer::sample(int batchSize)
 {
 	TrainBuffer batch;
 
-	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
+	// Initialize a uniform_int_distribution to produce values
+	std::uniform_int_distribution<int> myUnifIntDist(0, _trainingBuffer->size() - 1);
 
-		// Initialize a uniform_int_distribution to produce values
-		std::uniform_int_distribution<int> myUnifIntDist(0, _trainingBuffer->size() - 1);
-
-		// Create and print 5 randomly generated values
-		for (int i = 0; i < batchSize; i++) {
-			int number = myUnifIntDist(_myRandomEngine);
-			batch.push_back(_trainingBuffer->at(number));
-		}
+	// Randomly generated values
+	boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*_mutex);
+	for (int i = 0; i < batchSize; i++) {
+		int number = myUnifIntDist(_myRandomEngine);
+		batch.push_back(_trainingBuffer->at(number));
 	}
 
-	pthread_mutex_unlock(&_trainBufferLock);
+
 	return batch;
 }
 
-TrainBuffer ReplayBuffer::getCopy() {
+void ReplayBuffer::removeOld(int size) {
+	boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*_mutex);
 
-	TrainBuffer buff;
-	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
-		buff = *_trainingBuffer;
+	if (_trainingBuffer->size() < size) {
+		_trainingBuffer->clear();
 	}
-
-	pthread_mutex_unlock(&_trainBufferLock);
-
-	return buff;
+	auto first = _trainingBuffer->begin() + 0;
+	auto last = _trainingBuffer->begin() + size + 1;
+	_trainingBuffer->erase(first, last);
+	_trainingBuffer->shrink_to_fit();
 }
 
 void ReplayBuffer::add(TD data)
 {
+	boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*_mutex);
 	_bufferIndex = (_bufferIndex + 1) % _maxBufferSize;
-	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
-		if (_trainingBuffer->size() == _maxBufferSize) {
-			_trainingBuffer->at(_bufferIndex) = data;
-		}
-		else {
-			_trainingBuffer->push_back(data);
-		}
+	if (_trainingBuffer->size() == _maxBufferSize) {
+		_trainingBuffer->at(_bufferIndex) = data;
 	}
-
-	pthread_mutex_unlock(&_trainBufferLock);
+	else {
+		_trainingBuffer->push_back(data);
+	}
 }
 
-int ReplayBuffer::size() {
+int ReplayBuffer::size() 
+{
+	boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*_mutex);
 	return _trainingBuffer->size();
 }
 
-void ReplayBuffer::clear() {
-	
-	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
-		_trainingBuffer->clear();
-	}
-	
-	pthread_mutex_unlock(&_trainBufferLock);
+void ReplayBuffer::clear() 
+{
+	boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*_mutex);
+	_trainingBuffer->clear();
+
 }
-
-/*while (!parameters->freshData) {
-			pthread_cond_wait(&trainBufferCond, &trainBufferLock);
-		}*/
-
-		//if (offPolicy) {
-		//	// Shrink working copy if too large
-		//	if (trainingBufferCopy.size() == maxBufferSize) {
-		//		erase(trainingBufferCopy, 0, minBufferSize - 1);
-		//	}
-
-		//	// Add elements to our working copy
-		//	trainingBufferCopy = append(trainingBufferCopy, *trainingBuffer);
-		//	trainingBuffer->clear();
-		//	parameters->freshData = false;
-		//	pthread_mutex_unlock(&trainBufferLock);
-
-		//	// retrieve random batch
-		//	// std::random_shuffle(trainingBufferCopy.begin(), trainingBufferCopy.end());
-		//	for (int i = 0; i < batchSize; i++) {
-
-		//	}
-
-		//	// Perform training session
-		//	for (int i = 0, m = 0; i < sessions, m < maxBufferSize; i++, m += batchSize - 1) {
-
-		//		// Generate training sample
-		//		int n = m + batchSize - 1;
-		//		if (n < trainingBufferCopy.size()) {
-		//			TrainBuffer subBuf = slice(trainingBufferCopy, m, n);
-		//			pidAutoTuner->update(batchSize, &subBuf);
-		//		}
-		//		else {
-		//			parameters->isTraining = false;
-		//			break;
-		//		}
-		//	}
-		//} 
-		//else {
-
-		//	trainingBufferCopy.clear();
-		//	trainingBufferCopy = append(trainingBufferCopy, *trainingBuffer);
-		//	trainingBuffer->clear();
-		//	parameters->freshData = false;
-		//	pthread_mutex_unlock(&trainBufferLock);
-
-		//	pidAutoTuner->update(batchSize, &trainingBufferCopy);
-
-		//	parameters->isTraining = false;
-		//}

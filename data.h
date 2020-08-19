@@ -6,9 +6,10 @@
 #include <vector>
 #include "PID.h"
 
-//#include <boost/interprocess/managed_shared_memory.hpp>
-//#include <boost/interprocess/containers/vector.hpp>
-//#include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/containers/vector.hpp>
+#include <boost/interprocess/allocators/allocator.hpp>
+
 
 struct EventData {
 
@@ -48,8 +49,8 @@ struct TrainData {
 	bool done;
 } typedef TD;
 
-// typedef boost::interprocess::allocator<TD, boost::interprocess::managed_shared_memory::segment_manager> ShmemAllocator;
-// typedef boost::interprocess::vector<TD, ShmemAllocator> SharedBuffer;
+typedef boost::interprocess::allocator<TD, boost::interprocess::managed_shared_memory::segment_manager> ShmemAllocator;
+typedef boost::interprocess::vector<TD, ShmemAllocator> SharedBuffer;
 typedef std::vector<TD> TrainBuffer;
 
 struct Config {
@@ -81,6 +82,7 @@ struct Config {
 	double angleHigh;
 	double angleLow;
 	int updateRate;
+	int networkUpdateRate;
 	bool invertX;
 	bool invertY;
 	bool useArduino;
@@ -104,6 +106,7 @@ struct Config {
 		recheckChance(0.05),
 		lossCountMax(10),
 		updateRate(20),
+		networkUpdateRate(3),
 		invertX(false),
 		invertY(true),
 
@@ -132,8 +135,8 @@ struct Parameter {
 	int dims[2];
 
 	int pid;
+	int* sharedMemoryArray;
 	ED* eventData;
-	int rate; // Updates per second
 	int fd;
 
 	bool isTraining;

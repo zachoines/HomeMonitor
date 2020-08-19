@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <algorithm>
 
 // C libs
 #include <dirent.h>
@@ -19,14 +20,19 @@
 #include <sys/shm.h>
 #include <malloc.h>
 #include <sys/mman.h>
-#include <errno.h>
 
 // 3rd party libs
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
 #include <torch/torch.h>
-#include <vector>
-#include <algorithm>
+#include <pca9685.h> // For Servos
+
+// Boost imports
+#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/containers/vector.hpp>
+#include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/interprocess/sync/interprocess_condition.hpp>
 
 // OpenCV imports
 #include "opencv2/opencv.hpp"
@@ -50,8 +56,6 @@
 #include "SACAgent.h"
 #include "ReplayBuffer.h"
 
-// For Servos
-#include <pca9685.h>
 
 #define PIN_BASE 300
 #define MAX_PWM 4096
@@ -64,17 +68,18 @@ using namespace Utility;
 
 void* panTiltThread(void* args);
 void* detectThread(void* args);
-void* autoTuneThread(void* args);
 
-ED eventDataArray[2];
+static void usr_sig_handler1(const int sig_number, siginfo_t* sig_info, void* context);
+volatile sig_atomic_t sig_value1;
+
 pthread_cond_t trainCond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t trainLock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t stateDataLock = PTHREAD_MUTEX_INITIALIZER;
 
 SACAgent* pidAutoTuner = nullptr;
-ReplayBuffer* replayBuffer = nullptr;
 cv::VideoCapture camera(0);
 torch::Device device(torch::kCPU);
+ED eventDataArray[2];
 
 
 Ptr<Tracker> createOpenCVTracker(int type) {
@@ -106,7 +111,19 @@ int main(int argc, char** argv)
 	param* parameters = (param*)malloc(sizeof(param));
 	parameters->config = new Config();
 	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, 1.0, 0.0);
-	replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize);
+
+	// Create a large array for syncing parent and child process' models
+	int ShmID = shmget(IPC_PRIVATE, 10000 * sizeof(double), IPC_CREAT | 0666);
+	if (ShmID < 0) {
+		throw "Could not initialize shared memory";
+	}
+
+	// Create a shared memory buffer
+	boost::interprocess::shared_memory_object::remove("SharedMemorySegment");
+	boost::interprocess::managed_shared_memory segment(boost::interprocess::create_only, "SharedMemorySegment", sizeof(TD) * parameters->config->maxBufferSize * 2);
+	const ShmemAllocator alloc_inst(segment.get_segment_manager());
+	SharedBuffer* sharedTrainingBuffer = segment.construct<SharedBuffer>("SharedBuffer") (alloc_inst);
+	
 
 	// Setup Torch
 	if (torch::cuda::is_available()) {
@@ -140,16 +157,6 @@ int main(int argc, char** argv)
 		pca9685PWMReset(fd);
 	}
 
-	/* 
-	runServo(0, 180.0); // left
-	runServo(0, 90.0); // center
-	runServo(0, 0.0); // right
-
-	runServo(1, 180.0); // down
-	runServo(1, 90.0); // center
-	runServo(1, 0.0); // up
-	*/
-
 	if (!camera.isOpened())
 	{
 		throw "cannot initialize camera";
@@ -175,37 +182,203 @@ int main(int argc, char** argv)
 		runServo(0, 90);
 		runServo(1, 90);
 	}
-	
 
 	// Setup shared thread parameters
-	PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
-	PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
-
 	parameters->fd = fd;
 	parameters->eventData = eventDataArray;
-	parameters->pan = pan;
-	parameters->tilt = tilt;
-	parameters->rate = parameters->config->updateRate; 
-	parameters->isTraining = false;
-	parameters->freshData = false;
 
-	pthread_t panTid, tiltTid, detectTid, autoTuneTid, panTiltTid;
+	// Parent process is image recognition PID/servo controller, second is autotuner
+	pid_t pid = fork();
 
-	pthread_create(&panTiltTid, NULL, panTiltThread, (void*)parameters);
-	pthread_create(&detectTid, NULL, detectThread, (void*)parameters);
-	pthread_create(&autoTuneTid, NULL, autoTuneThread, (void*)parameters);
+	// Parent process
+	if (pid > 0) {
 
-	pthread_join(panTiltTid, NULL);
-	pthread_join(detectTid, NULL);
-	pthread_join(autoTuneTid, NULL);
+		// Find shared memeory reference for the parent
+		double* ShmPTRParent;
+		ShmPTRParent = (double*)shmat(ShmID, 0, 0);
+
+		if ((int)ShmPTRParent == -1) {
+			throw "Could not initialize shared memory";
+		}
+
+		parameters->pid = pid;
+
+		// Kill child if parent dies
+		prctl(PR_SET_PDEATHSIG, SIGKILL); 
+
+		// Setup signal mask
+		sigset_t  mask;
+		siginfo_t info;
+		pid_t     child, p;
+		int       signum;
+
+		sigemptyset(&mask);
+		sigaddset(&mask, SIGINT);
+		sigaddset(&mask, SIGHUP);
+		sigaddset(&mask, SIGTERM);
+		sigaddset(&mask, SIGQUIT);
+		sigaddset(&mask, SIGUSR1);
+		sigaddset(&mask, SIGUSR2);
+
+		if (sigprocmask(SIG_BLOCK, &mask, NULL) == -1) {
+			throw "Cannot block SIGUSR1 or SIGUSR2";
+		}
+
+		PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
+		PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
+		parameters->pan = pan;
+		parameters->tilt = tilt;
+
+		pthread_t detectTid, panTiltTid;
+		pthread_create(&panTiltTid, NULL, panTiltThread, (void*)parameters);
+		pthread_create(&detectTid, NULL, detectThread, (void*)parameters);
+		pthread_detach(panTiltTid);
+		pthread_detach(detectTid);
+
+		
+		while (true) {
+
+			signum = sigwaitinfo(&mask, &info);
+			if (signum == -1) {
+				if (errno == EINTR)
+					continue;
+				throw "Parent process: sigwaitinfo() failed";
+			}
+
+			// Update weights on signal received from autotune thread
+			if (signum == SIGUSR1 && info.si_pid == pid) {
+				std::cout << "Loading new weights..." << std::endl;
+				if (pthread_mutex_lock(&stateDataLock) == 0) {
+					int valuesRead = pidAutoTuner->sync(true, ShmPTRParent);
+					std::cout << "Tensors read in parent: " << valuesRead << std::endl;
+				}
+
+				pthread_mutex_unlock(&stateDataLock);
+			}
+
+			// Break when on SIGINT
+			if (signum == SIGINT && !info.si_pid == pid) {
+				camera.release();
+				std::cout << "Ctrl+C detected!" << std::endl;
+				break;
+			}
+		}
+
+		// Terminate Child processes
+		kill(-pid, SIGQUIT);
+		if (wait(NULL) != -1) {
+			return 0;
+		}
+		else {
+			return -1;
+		}
+	}
+	else {
+
+		SACAgent* pidAutoTunerChild = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, 1.0, 0.0);
+
+		// Get Shared memory reference for the child
+		double* ShmPTRChild;
+		ShmPTRChild = (double*)shmat(ShmID, 0, 0);
+
+		if ((int)ShmPTRChild == -1) {
+			throw "Could not initialize shared memory";
+		}
+
+		// Retrieve the training buffer from shared memory
+		boost::interprocess::managed_shared_memory _segment = boost::interprocess::managed_shared_memory(boost::interprocess::open_only, "SharedMemorySegment");
+		SharedBuffer* trainingBuffer = _segment.find<SharedBuffer>("SharedBuffer").first;
+
+		int batchSize = parameters->config->batchSize;
+		int sessions = parameters->config->maxTrainingSessions;
+		bool offPolicy = parameters->config->offPolicyTrain;
+		int milis = 1000 / parameters->config->networkUpdateRate;
+
+		ReplayBuffer* replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize, trainingBuffer);
+
+		// Setup signal mask
+		struct sigaction sig_action;
+		sigset_t oldmask;
+		sigset_t newmask;
+		sigset_t zeromask;
+
+		memset(&sig_action, 0, sizeof(struct sigaction));
+
+		sig_action.sa_flags = SA_SIGINFO;
+		sig_action.sa_sigaction = usr_sig_handler1;
+
+		sigaction(SIGHUP, &sig_action, NULL);
+		sigaction(SIGINT, &sig_action, NULL);
+		sigaction(SIGTERM, &sig_action, NULL);
+		sigaction(SIGSEGV, &sig_action, NULL);
+		sigaction(SIGUSR1, &sig_action, NULL);
+
+		sigemptyset(&newmask);
+		sigaddset(&newmask, SIGHUP);
+		sigaddset(&newmask, SIGINT);
+		sigaddset(&newmask, SIGTERM);
+		sigaddset(&newmask, SIGSEGV);
+		sigaddset(&newmask, SIGUSR1);
+
+		sigprocmask(SIG_BLOCK, &newmask, &oldmask);
+		sigemptyset(&zeromask);
+		sig_value1 = 0;
+
+		// Wait on parent process' signal before training
+		while ((sig_value1 != SIGINT) && (sig_value1 != SIGTERM))
+		{
+			sig_value1 = 0;
+
+			// Sleep until signal is caught; train model on waking
+			sigsuspend(&zeromask);
+
+			if (sig_value1 == SIGUSR1) {
+
+				std::cout << "Train signal received..." << std::endl;
+
+				bool isTraining = true;
+
+				// Begin training process
+				while (isTraining) {
+
+					for (int i = 0; i < sessions; i++) {
+						TrainBuffer batch = replayBuffer->sample(batchSize);
+						pidAutoTunerChild->update(batchSize, &batch);
+					}
+					
+					// replayBuffer->removeOld(batchSize);
+
+					int valuesWritten = pidAutoTunerChild->sync(false, ShmPTRChild);
+
+					std::cout << "Tensors written in child: " << valuesWritten << std::endl;
+
+					kill(getppid(), SIGUSR1);
+
+					
+					if (replayBuffer->size() == 0) {
+						isTraining = false; 
+					}
+					else {
+						msleep(milis);
+					}			
+				}
+			}
+		}
+	}
 
 	// Terminate child processes and cleanup windows
 	cv::destroyAllWindows();
 }
 
 void* panTiltThread(void* args) {
+
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
+
+	// Retrieve the training buffer from shared memory
+	boost::interprocess::managed_shared_memory _segment = boost::interprocess::managed_shared_memory(boost::interprocess::open_only, "SharedMemorySegment");
+	SharedBuffer* trainingBuffer = _segment.find<SharedBuffer>("SharedBuffer").first;
+	ReplayBuffer* replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize, trainingBuffer);
 
 	bool invert[2] = {
 		parameters->config->invertY,
@@ -230,7 +403,7 @@ void* panTiltThread(void* args) {
 		0.0
 	};
 
-	int milis = 1000 / parameters->rate;
+	int milis = 1000 / parameters->config->updateRate;
 	int fd = parameters->fd;
 	bool programStart = true;
 	bool addData = false;
@@ -337,12 +510,8 @@ void* panTiltThread(void* args) {
 					// Update PID, get new angle
 					pids[i]->setWeights(scaledActions[0], scaledActions[2], scaledActions[3]);
 					double errorBound = static_cast<double>(parameters->dims[i]) / 2;
-					// double scaledError = Utility::mapOutput(eventData[i].error, -errorBound, errorBound, 0.0, 2.0 * errorBound);
 					newAngles[i] = pids[i]->update(eventData[i].error / errorBound, 0);
-					// std::cout << "New angle before clamp: " << newAngles[i] << std::endl;
 					newAngles[i] = Utility::mapOutput(newAngles[i], -75.0, 75.0, parameters->config->angleLow, parameters->config->angleHigh);
-					
-					// std::cout << "New angle: " << newAngles[i] << std::endl;	
 					
 					if (invert[i]) {
 						newAngles[i] = parameters->config->angleHigh - newAngles[i];
@@ -386,26 +555,12 @@ void* panTiltThread(void* args) {
 		else {
 			goto sleep;
 		}
-
-		if (!parameters->isTraining) {
-			replayBuffer->add(trainData[1]);
-		}
 		
-		if (!parameters->freshData) {
-
-			if (pthread_mutex_lock(&trainLock) == 0) {
-				if (replayBuffer->size() >= parameters->config->minBufferSize) {
-					parameters->freshData = true;
-
-					if (!parameters->config->offPolicyTrain) {
-						parameters->isTraining = true;
-					}
-					
-					pthread_cond_broadcast(&trainCond);
-				}
-			}
-
-			pthread_mutex_unlock(&trainLock);
+		replayBuffer->add(trainData[0]);
+		replayBuffer->add(trainData[1]);
+		
+		if (replayBuffer->size() >= parameters->config->minBufferSize) {
+			kill(parameters->pid, SIGUSR1);
 		}
 		
 	sleep:
@@ -536,14 +691,12 @@ void* detectThread(void* args)
 				// Get the new tracking result
 				if (!tracker->update(frame, roi)) {
 					isTracking = false;
-					// std::cout << "Lost target!!" << std::endl;
 					lossCount++;
 					goto detect;
 				}
 
 				// Chance to revalidate object tracking quality
 				if (recheckChance >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
-					// std::cout << "Rechecking tracking quality..." << std::endl;
 					rechecked = true;
 					goto detect;
 				}
@@ -746,43 +899,14 @@ void* detectThread(void* args)
 	return NULL;
 }
 
-void* autoTuneThread(void* args)
+static void usr_sig_handler1(const int sig_number, siginfo_t* sig_info, void* context)
 {
-	param* parameters = (param*)args;
-	int batchSize = parameters->config->batchSize;
-	bool offPolicy = parameters->config->offPolicyTrain;
-	
-	while (true) {
-		
-		// Wait until there is enough data in the training buffer
-		while (!parameters->freshData) {
-			pthread_cond_wait(&trainCond, &trainLock);
-		}
-
-
-		if (offPolicy) {
-			TrainBuffer batch = replayBuffer->sample(batchSize);
-			pidAutoTuner->update(batchSize, &batch);
-			delay(1000);
-		} 
-		else {
-
-			TrainBuffer buff = replayBuffer->getCopy();
-			int numSamples = buff.size() / batchSize;
-			for (int sample = 1, m = 0; sample <= numSamples; sample += 1) {
-				int n = sample * batchSize - 1;
-				
-				TrainBuffer subBuf = slice(buff, m, n);
-				pidAutoTuner->update(batchSize, &subBuf);
-
-				m = n;
-			}
-
-			replayBuffer->clear();
-			parameters->isTraining = false;
-			parameters->freshData = false;
-		}
+	// Take care of all segfaults
+	if (sig_number == SIGSEGV)
+	{
+		perror("SIGSEV: Address access error.");
+		exit(-1);
 	}
 
-	return NULL;
+	sig_value1 = sig_number;
 }

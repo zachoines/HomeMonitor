@@ -30,9 +30,10 @@ private:
 	torch::Tensor _log_alpha, _alpha;
 	c10::Scalar _target_entropy;
 	torch::optim::Adam* _alpha_optimizer = nullptr;
-	void _save_to(torch::nn::Module& model, std::stringstream& fd);
-	void _load_from(torch::nn::Module& model, std::stringstream& fd);
-	void _transfer_params_v1(torch::nn::Module& from, torch::nn::Module& to);
+	int _save_to_array(torch::nn::Module& from, double* address, int index);
+	int _save_to_array(torch::Tensor& from, double* address, int index);
+	int _load_from_array(torch::nn::Module& to, double* address, int index);
+	int _load_from_array(torch::Tensor& to, double* address, int index);
 	void _transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing = false);
 
 public:
@@ -40,6 +41,7 @@ public:
 	~SACAgent();
 
 	void update(int batchSize, TrainBuffer* replayBuffer);
+	int sync(bool parent, double* data);
 	torch::Tensor get_action(torch::Tensor state);
 
 	void save_checkpoint();
