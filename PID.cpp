@@ -11,7 +11,7 @@ PID::PID(double kP, double kI, double kD, double min, double max) {
 	_max = max;
 	_min = min;
 
-	_windup_guard = 100; 
+	_windup_guard = 10000; 
 }
 
 void PID::init() {

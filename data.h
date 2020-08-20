@@ -98,15 +98,15 @@ struct Config {
 		numHidden(32),
 		numInput(3),
 
-		maxBufferSize(10000),
+		maxBufferSize(100000),
 		minBufferSize(256),
-		maxTrainingSessions(32),
-		batchSize(32),
+		maxTrainingSessions(8),
+		batchSize(64),
 
 		recheckChance(0.05),
 		lossCountMax(10),
-		updateRate(20),
-		networkUpdateRate(3),
+		updateRate(30),
+		networkUpdateRate(1),
 		invertX(false),
 		invertY(true),
 
