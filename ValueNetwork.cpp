@@ -39,8 +39,8 @@ torch::Tensor ValueNetwork::forward(torch::Tensor state)
 {
 	torch::Tensor X;
 
-	X = torch::relu(linear1->forward(state));
-	X = torch::relu(linear2->forward(X));
+	X = torch::leaky_relu(linear1->forward(state));
+	X = torch::leaky_relu(linear2->forward(X));
 	X = linear3->forward(X);
 
 	return X;

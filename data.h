@@ -4,48 +4,46 @@
 	Keeps main.cpp cleaner.
 */
 #include <vector>
+#include <string>
 #include "PID.h"
 
-//#include <boost/interprocess/managed_shared_memory.hpp>
-//#include <boost/interprocess/containers/vector.hpp>
-//#include <boost/interprocess/allocators/allocator.hpp>
+#define NUM_INPUT 6
+#define NUM_ACTIONS 3
+#define NUM_HIDDEN 128
 
-struct EventData {
+struct EventData { 
 
 	bool done;
-	double Obj;
-	double Frame;
+	double Obj; // The X or Y center of object on in frame
+	double size; // The bounding size of object along its X or Y axis
+	double point; // The X or Y Origin coordinate of object
+	double Frame; // The X or Y center of frame
 	double error;
 	double timestamp;
-
-	EventData() : done(false) {}
+	void reset() {
+		done = true;
+		error = 0.0;
+		Obj = 0.0;
+		size = 0.0;
+		Frame = 0.0;
+		timestamp = 0.0;
+	}
+	EventData() : done(true), error(0.0), Frame(0.0), Obj(0.0), timestamp(0.0) {}
 } typedef ED;
 
 struct StateData {
 
-	double stateArray[3];
-	
-	double objCenter;
-	double frameCenter;
-	double error;
+	double stateArray[NUM_INPUT];
 
-	double objCenterOld;
-	double frameCenterOld;
-	double errorOld;
-	
-	double p;
-	double i;
-	double d;
-
-	void setStateArray(double state[3]) {
-		for (int i = 0; i < 3; i++) {
+	void setStateArray(double state[NUM_INPUT]) {
+		for (int i = 0; i < NUM_INPUT; i++) {
 			stateArray[i] = state[i];
 		}
 	}
 
-	void getStateArray(double state[3]) {
+	void getStateArray(double state[NUM_INPUT]) {
 
-		for (int i = 0; i < 3; i++) {
+		for (int i = 0; i < NUM_INPUT; i++) {
 			state[i] = stateArray[i];
 		}
 	}
@@ -56,12 +54,10 @@ struct TrainData {
 	SD currentState;
 	SD nextState;
 	double reward;
-	double actions[1];
+	double actions[NUM_ACTIONS];
 	bool done;
 } typedef TD;
 
-// typedef boost::interprocess::allocator<TD, boost::interprocess::managed_shared_memory::segment_manager> ShmemAllocator;
-// typedef boost::interprocess::vector<TD, ShmemAllocator> SharedBuffer;
 typedef std::vector<TD> TrainBuffer;
 
 struct Config {
@@ -78,11 +74,18 @@ struct Config {
 	int maxTrainingSessions;
 	int batchSize;
 	bool offPolicyTrain;
+	bool initialRandomActions;
+	int numInitialRandomActions;
+	bool trainMode;
+	bool defaultMode;
+	bool frameSkip;
+	int numFrameSkip;
 
 	// Tracking Options
 	float recheckChance;
 	int trackerType;
 	bool useTracking;
+	bool useAutoTuning;
 	bool draw;
 	bool showVideo;
 	bool cascadeDetector;
@@ -92,11 +95,19 @@ struct Config {
 	// Servo options
 	double angleHigh;
 	double angleLow;
+	double resetAngleX;
+	double resetAngleY;
+	double pidOutputHigh;
+	double pidOutputLow;
+	double defaultGains[3];
 	int updateRate;
+	int trainRate;
 	bool invertX;
 	bool invertY;
+	bool disableX;
+	bool disableY;
 	bool useArduino;
-	unsigned char arduinoCommands[3];
+	unsigned char arduinoCommands[3]; 
 
 	// bounds
 	double actionHigh;
@@ -104,36 +115,50 @@ struct Config {
 
 	Config() :
 
-		numActions(3),
-		numHidden(32),
-		numInput(3),
+		numActions(NUM_ACTIONS),
+		numHidden(NUM_HIDDEN),
+		numInput(NUM_INPUT),
 
-		maxBufferSize(100000),
-		minBufferSize(512),
-		maxTrainingSessions(32),
-		batchSize(64),
+		maxBufferSize(1e4),
+		minBufferSize(128),
+		maxTrainingSessions(1),
+		batchSize(32),
+		initialRandomActions(true),
+		numInitialRandomActions(1e3),
+		trainMode(true), // When autotuning is on, use to execute means from network as PID gains and save to replay buffer..
+		defaultMode(false), // When autotuning is set to off, use to only execute the degault gains, otherwise query network 'means' as the PID gains.
+		frameSkip(true),
+		numFrameSkip(4),
 
-		recheckChance(0.05),
-		lossCountMax(10),
-		updateRate(10),
+		recheckChance(0.2),
+		lossCountMax(1),
+		updateRate(30),
+		trainRate(1),
 		invertX(false),
 		invertY(true),
+		disableX(false),
+		disableY(true),
 
 		useArduino(false),
 		arduinoCommands({ 0x3, 0x2, 0x8 }),
 
 		trackerType(1),
 		useTracking(true),
-		draw(false),
-		showVideo(false),
+		useAutoTuning(true), // Use SAC network to query for PID gains
+		draw(true),
+		showVideo(true),
 		cascadeDetector(true),
 		target("face"),
-
-		actionHigh(10.0),
+		actionHigh(0.2),
 		actionLow(0.0),
-		angleHigh(165.0),
-		angleLow(15.0),
-		offPolicyTrain(true)
+		pidOutputHigh(70.0),
+		pidOutputLow(-70.0),
+		defaultGains({0.05, 0.0, 0.0}),
+		angleHigh(70.0),
+		angleLow(-70.0),
+		resetAngleX(0.0),
+		resetAngleY(-15.0),
+		offPolicyTrain(false)
 		{}
 } typedef cfg;
 

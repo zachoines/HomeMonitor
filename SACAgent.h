@@ -10,7 +10,7 @@ class SACAgent
 private:
 	double _gamma, _tau, _a_lr, _q_lr, _p_lr;
 	int _num_inputs, _num_actions;
-	double _action_max, _action_min;
+	double _action_max, _action_min, _action_scale, _action_bias;
 	int _current_update = 0;
 	int _current_save_delay = 0;
 	int _max_save_delay = 10;
@@ -36,11 +36,11 @@ private:
 	void _transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing = false);
 
 public:
-	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max = 1.0, double action_min = 0.0, bool alphaAdjuster = true, double gamma = 0.99, double tau = 0.01, double alpha = 0.2, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
+	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max = 1.0, double action_min = 0.0, bool alphaAdjuster = true, double gamma = 0.99, double tau = 5e-3, double alpha = 0.2, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
 	~SACAgent();
 
 	void update(int batchSize, TrainBuffer* replayBuffer);
-	torch::Tensor get_action(torch::Tensor state);
+	torch::Tensor get_action(torch::Tensor state, bool trainMode = true);
 
 	void save_checkpoint();
 	bool load_checkpoint();

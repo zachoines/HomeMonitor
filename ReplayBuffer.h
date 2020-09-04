@@ -17,16 +17,16 @@ private:
 	int _maxBufferSize;
 	int _bufferIndex = -1;
 
-	// random number generation
-	std::random_device _myRandomDevice;
-	std::default_random_engine _myRandomEngine;
+	// Create a random device and use it to generate a random seed
+	std::mt19937 eng{ std::random_device{}() };
 
 public:
 	ReplayBuffer(int maxBufferSize = 1024);
-	TrainBuffer sample(int batchSize = 32);
+	TrainBuffer sample(int batchSize = 32, bool remove = true);
 	TrainBuffer getCopy();
 	void add(TD data);
 	int size();
 	void clear();
+	int _draw(int min, int max);
 };
 

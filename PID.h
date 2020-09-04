@@ -10,6 +10,7 @@ class PID
 		void setWeights(double kP, double kI, double kD);
 		void getPID(double w[3]);
 		void setWindupGaurd(double guard);
+		double getWindupGaurd();
 
 	private:
 		double _max;
@@ -22,6 +23,10 @@ class PID
 		double _cP;
 		double _cI;
 		double _cD;
+
+		double _init_kP;
+		double _init_kI;
+		double _init_kD;
 
 		std::chrono::steady_clock::time_point _currTime;
 		std::chrono::steady_clock::time_point _prevTime;

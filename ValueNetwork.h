@@ -12,7 +12,7 @@ public:
 	torch::optim::Adam* optimizer = nullptr;
 
 	// Constructor
-	ValueNetwork(int num_inputs, int hidden_size, double init_w = 3e-3, double learning_rate = 3e-4);
+	ValueNetwork(int num_inputs, int hidden_size, double init_w = 3e-3, double learning_rate = 0.001);
 	~ValueNetwork();
 	torch::Tensor forward(torch::Tensor state);
 

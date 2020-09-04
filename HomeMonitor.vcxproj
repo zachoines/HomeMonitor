@@ -74,9 +74,9 @@
   <ItemGroup>
     <ClCompile Include="CaffeDetector.cpp" />
     <ClCompile Include="CascadeDetector.cpp" />
+    <ClCompile Include="Env.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ReplayBuffer.cpp" />
-    <ClCompile Include="track.cpp" />
     <ClCompile Include="QNetwork.cpp" />
     <ClCompile Include="Normal.cpp" />
     <ClCompile Include="ObjectDetector.cpp" />
@@ -113,6 +113,7 @@
     <ClInclude Include="CaffeDetector.h" />
     <ClInclude Include="CascadeDetector.h" />
     <ClInclude Include="data.h" />
+    <ClInclude Include="Env.h" />
     <ClInclude Include="QNetwork.h" />
     <ClInclude Include="Normal.h" />
     <ClInclude Include="ObjectDetector.h" />

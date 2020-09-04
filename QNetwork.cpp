@@ -52,8 +52,8 @@ torch::Tensor QNetwork::forward(torch::Tensor state, torch::Tensor actions)
 {
 	torch::Tensor X;
 
-	X = torch::relu(linear1->forward(torch::cat({ state, actions }, 1)));
-	X = torch::relu(linear2->forward(X));
+	X = torch::leaky_relu(linear1->forward(torch::cat({ state, actions }, 1)));
+	X = torch::leaky_relu(linear2->forward(X));
 	X = linear3->forward(X);
 
 	return X;

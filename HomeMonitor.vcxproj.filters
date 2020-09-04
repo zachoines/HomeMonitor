@@ -18,10 +18,10 @@
     <ClCompile Include="Normal.cpp" />
     <ClCompile Include="SACAgent.cpp" />
     <ClCompile Include="QNetwork.cpp" />
-    <ClCompile Include="track.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ReplayBuffer.cpp" />
     <ClCompile Include="ValueNetwork.cpp" />
+    <ClCompile Include="Env.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="readme.md">
@@ -60,6 +60,7 @@
     <ClInclude Include="QNetwork.h" />
     <ClInclude Include="ReplayBuffer.h" />
     <ClInclude Include="ValueNetwork.h" />
+    <ClInclude Include="Env.h" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />

@@ -3,8 +3,10 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <random>
 
 // C libs
+#include <ctime>
 #include <dirent.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -41,6 +43,11 @@
 #include "opencv2/video/video.hpp"
 #include <opencv2/tracking.hpp>
 
+// Boost
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/uniform_int_distribution.hpp>
+#include <boost/random/variate_generator.hpp>
+
 // Local classes and files
 #include "CaffeDetector.h"
 #include "CascadeDetector.h"
@@ -49,6 +56,7 @@
 #include "data.h"
 #include "SACAgent.h"
 #include "ReplayBuffer.h"
+#include "Env.h"
 
 // For Servos
 #include <pca9685.h>
@@ -67,9 +75,12 @@ void* detectThread(void* args);
 void* autoTuneThread(void* args);
 
 ED eventDataArray[2];
+
 pthread_cond_t trainCond = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t trainLock = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t stateDataLock = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_cond_t dataCond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t dataLock = PTHREAD_MUTEX_INITIALIZER;
 
 SACAgent* pidAutoTuner = nullptr;
 ReplayBuffer* replayBuffer = nullptr;
@@ -105,7 +116,11 @@ int main(int argc, char** argv)
 	torch::set_default_dtype(default_dtype);
 	param* parameters = (param*)malloc(sizeof(param));
 	parameters->config = new Config();
-	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, 1.0, 0.0);
+	PID* pan = new PID(parameters->config->defaultGains[0], parameters->config->defaultGains[1], parameters->config->defaultGains[2], parameters->config->pidOutputLow, parameters->config->pidOutputHigh);
+	PID* tilt = new PID(parameters->config->defaultGains[0], parameters->config->defaultGains[1], parameters->config->defaultGains[2], parameters->config->pidOutputLow, parameters->config->pidOutputHigh);
+	parameters->pan = pan;
+	parameters->tilt = tilt;
+	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, parameters->config->actionHigh, parameters->config->actionLow);
 	replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize);
 
 	// Setup Torch
@@ -140,16 +155,6 @@ int main(int argc, char** argv)
 		pca9685PWMReset(fd);
 	}
 
-	/* 
-	runServo(0, 180.0); // left
-	runServo(0, 90.0); // center
-	runServo(0, 0.0); // right
-
-	runServo(1, 180.0); // down
-	runServo(1, 90.0); // center
-	runServo(1, 0.0); // up
-	*/
-
 	if (!camera.isOpened())
 	{
 		throw "cannot initialize camera";
@@ -172,19 +177,12 @@ int main(int argc, char** argv)
 		sendComand(0x8, 0x0, fd); // Reset servos
 	}
 	else {
-		runServo(0, 90);
-		runServo(1, 90);
+		runServo(0, parameters->config->resetAngleY);
+		runServo(1, parameters->config->resetAngleX);
 	}
-	
-
-	// Setup shared thread parameters
-	PID* pan = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
-	PID* tilt = new PID(0.05, 0.04, 0.001, -75.0, 75.0);
 
 	parameters->fd = fd;
 	parameters->eventData = eventDataArray;
-	parameters->pan = pan;
-	parameters->tilt = tilt;
 	parameters->rate = parameters->config->updateRate; 
 	parameters->isTraining = false;
 	parameters->freshData = false;
@@ -193,226 +191,145 @@ int main(int argc, char** argv)
 
 	pthread_create(&panTiltTid, NULL, panTiltThread, (void*)parameters);
 	pthread_create(&detectTid, NULL, detectThread, (void*)parameters);
-	pthread_create(&autoTuneTid, NULL, autoTuneThread, (void*)parameters);
+
+	if (parameters->config->useAutoTuning) {
+		pthread_create(&autoTuneTid, NULL, autoTuneThread, (void*)parameters);
+	}
+	
 
 	pthread_join(panTiltTid, NULL);
 	pthread_join(detectTid, NULL);
-	pthread_join(autoTuneTid, NULL);
+
+	if (parameters->config->useAutoTuning)
+	{
+		pthread_join(autoTuneTid, NULL);
+	}
+		
 
 	// Terminate child processes and cleanup windows
 	cv::destroyAllWindows();
 }
 
 void* panTiltThread(void* args) {
+	std::mt19937 eng{ std::random_device{}() };
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
 
-	bool invert[2] = {
-		parameters->config->invertY,
-		parameters->config->invertX
-	};
-	
+	Env* servos = new Env(parameters, &dataLock, &dataCond);
 	// PIDs
 	PID* pan = parameters->pan;
 	PID* tilt = parameters->tilt;
 
-	pan->init();
-	tilt->init();
-
-	PID* pids[2] = {
-		tilt,
-		pan
-	};
-
-	// Servo/program state variables
-	int errorCounter = -1;
-	double previousErrors[2][2][3] = {
+	// training state variables
+	bool initialRandomActions = parameters->config->initialRandomActions;
+	int numInitialRandomActions = parameters->config->numInitialRandomActions;
+	bool trainMode = parameters->config->trainMode;
+	
+	double predictedActions[2][3] = {
 		0.0
 	};
 
-	int milis = 1000 / parameters->rate;
-	int fd = parameters->fd;
-	bool programStart = true;
-	bool addData = false;
+	SD currentState[2];
+	TD trainData[2];
+	ED eventData[2];
 
-	// I2c commands for arduino
-	unsigned char commands[2];
-	commands[0] = parameters->config->arduinoCommands[0];
-	commands[1] = parameters->config->arduinoCommands[1];
+	servos->resetEnv();
 
-	// Previous state data
-	SD lastState[2];
-	ED lastData[2];
-	double lastTimeStamp[2];
-	double newAngles[2] = {
-			90.0
-	};
+	if (!servos->init(currentState)) {
+		throw "Could not initialize servos and pid's";
+	}
 
 	while (true) {
 
-		errorCounter = (errorCounter + 1) % 3;
+		if (parameters->config->useAutoTuning) {
 
-		SD currentState[2];
-		TD trainData[2];
-		ED eventData[2];
-		
+			if (!servos->isDone()) {
+				for (int i = 0; i < 2; i++) {
 
-		if (pthread_mutex_lock(&stateDataLock) == 0) { 
-
-			eventData[0] = parameters->eventData[0];
-			eventData[1] = parameters->eventData[1];
-
-			pthread_mutex_unlock(&stateDataLock);
-
-			
-			for (int i = 1; i < 2; i++) {
-
-				if (eventData[i].timestamp == lastTimeStamp[i]) {
-					lastTimeStamp[i] = eventData[i].timestamp;
-					goto sleep;
-				}
-				else if (trainData[i].done) {
-					pan->init();
-					tilt->init();
-					
-					lastTimeStamp[i] = eventData[i].timestamp;
-				}
-				
-				
-				// Fill out the current state
-				lastTimeStamp[i] = eventData[i].timestamp;
-				previousErrors[i][0][errorCounter] = eventData[i].timestamp;
-				previousErrors[i][1][errorCounter] = (eventData[i].error / (static_cast<double>(parameters->dims[i]) / 2.0));
-				
-				int k, j;
-				double key;
-				double key2;
-				for (k = 1; k < 3; k++)
-				{
-					key = previousErrors[i][0][k];
-					key2 = previousErrors[i][1][k];
-					j = k - 1;
-
-					while (j >= 0 && previousErrors[i][1][j] > key)
-					{
-						previousErrors[i][1][j + 1] = previousErrors[i][1][j];
-						previousErrors[i][0][j + 1] = previousErrors[i][0][j];
-						j = j - 1;
-					}
-					previousErrors[i][0][j + 1] = key;
-					previousErrors[i][1][j + 1] = key2;
-				}
-
-				double state[3] = {
-					0.0
-				};
-
-				// Error, e(t) = y′(t) - y(t)
-				state[0] = previousErrors[i][1][2];
-
-				// First order error, e(t) - e(t−1)
-				state[1] = state[0] - previousErrors[i][1][1];
-
-				// Second order error, e(t) − 2∗e(t−1) + e(t−2)
-				state[2] = state[0] - 2.0 * previousErrors[i][1][1] + previousErrors[i][1][0];
-
-				currentState[i].setStateArray(state);
-
-
-				// If not end of State
-				if (!trainData[i].done) {
 					double stateArray[parameters->config->numInput];
-					currentState[i].getStateArray(stateArray);
 
-					// Normalize and get new PID gains
-					torch::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options));
-					auto actions_a = actions.accessor<double, 1>();
-					double scaledActions[parameters->config->numActions];
+					// Query network and get PID gains
+					if (trainMode) {
+						if (initialRandomActions && numInitialRandomActions >= 0) {
 
-					for (int a = 0; a < parameters->config->numActions; a++) {
-						scaledActions[a] = Utility::rescaleAction(actions_a[a], parameters->config->actionLow, parameters->config->actionHigh);
-						trainData[i].actions[a] = actions_a[a];
-					}
+							numInitialRandomActions--;
+							for (int a = 0; a < parameters->config->numActions; a++) {
+								predictedActions[i][a] = std::uniform_real_distribution<double>{ parameters->config->actionLow, parameters->config->actionHigh }(eng);;
+							}
+						}
+						else {
+							currentState[i].getStateArray(stateArray);
+							at::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options), true);
 
-					// Update PID, get new angle
-					pids[i]->setWeights(scaledActions[0], scaledActions[2], scaledActions[3]);
-					double errorBound = static_cast<double>(parameters->dims[i]) / 2;
-					// double scaledError = Utility::mapOutput(eventData[i].error, -errorBound, errorBound, 0.0, 2.0 * errorBound);
-					newAngles[i] = pids[i]->update(eventData[i].error / errorBound, 0);
-					// std::cout << "New angle before clamp: " << newAngles[i] << std::endl;
-					newAngles[i] = Utility::mapOutput(newAngles[i], -75.0, 75.0, parameters->config->angleLow, parameters->config->angleHigh);
-					
-					// std::cout << "New angle: " << newAngles[i] << std::endl;	
-					
-					if (invert[i]) {
-						newAngles[i] = parameters->config->angleHigh - newAngles[i];
-					} 
-
-					if (parameters->config->useArduino) {
-						sendComand(commands[i], static_cast<unsigned char>(static_cast<int>(newAngles[i])), fd);
+							if (parameters->config->numActions > 1) {
+								auto actions_a = actions.accessor<double, 1>();
+								for (int a = 0; a < parameters->config->numActions; a++) {
+									predictedActions[i][a] = actions_a[a];
+								}
+							}
+							else {
+								predictedActions[i][0] = actions.item().toDouble();
+							}
+							
+						}
 					}
 					else {
-						runServo(i, newAngles[i]);
-					}		
-				}
-
-				// Done only once, for when we don't have a lastState
-				if (programStart) { 
-					
-					lastState[i] = currentState[i];
-					lastData[i] = eventData[i];
-
-					if (i == 1) {
-						programStart = false;
-						goto sleep;
-					}
-					else {
-						continue;
+						currentState[i].getStateArray(stateArray);
+						at::Tensor actions = pidAutoTuner->get_action(torch::from_blob(stateArray, { 1, parameters->config->numInput }, options), false);
+						if (parameters->config->numActions > 1) {
+							auto actions_a = actions.accessor<double, 1>();
+							for (int a = 0; a < parameters->config->numActions; a++) {
+								predictedActions[i][a] = actions_a[a];
+							}
+						}
+						else {
+							predictedActions[i][0] = actions.item().toDouble();
+						}
 					}
 					
 				}
-				else {
-					// Fill out train data entry
-					trainData[i].done = eventData[i].done;
-					trainData[i].reward = errorToReward(eventData[i].error, lastData[i].error, parameters->dims[i] / 2, eventData[i].done);
-					trainData[i].nextState = currentState[i];
-					trainData[i].currentState = lastState[i];
-					lastState[i] = currentState[i];
-					lastData[i] = eventData[i];
-				}
 
-			}		
-		}
-		else {
-			goto sleep;
-		}
+				servos->step(predictedActions, currentState);
 
-		if (!parameters->isTraining) {
-			replayBuffer->add(trainData[1]);
-		}
-		
-		if (!parameters->freshData) {
+				if (trainMode) {
 
-			if (pthread_mutex_lock(&trainLock) == 0) {
-				if (replayBuffer->size() >= parameters->config->minBufferSize) {
-					parameters->freshData = true;
+					if (servos->hasData()) {
+						servos->getResults(trainData);
+						// replayBuffer->add(trainData[0]);
+						replayBuffer->add(trainData[1]);
 
-					if (!parameters->config->offPolicyTrain) {
-						parameters->isTraining = true;
+						if (!parameters->freshData) {
+							pthread_mutex_lock(&trainLock);
+
+							if (replayBuffer->size() >= parameters->config->minBufferSize) {
+								parameters->freshData = true;
+								pthread_cond_broadcast(&trainCond);
+							}
+
+							pthread_mutex_unlock(&trainLock);
+						}
 					}
-					
-					pthread_cond_broadcast(&trainCond);
 				}
 			}
-
-			pthread_mutex_unlock(&trainLock);
+			else {
+				servos->ping(currentState);
+			}
 		}
-		
-	sleep:
-		msleep(milis);
-	}
+		else {
+			if (!servos->isDone()) {
+				for (int i = 0; i < 2; i++) {
+					predictedActions[i][0] = parameters->config->defaultGains[0];
+					predictedActions[i][1] = parameters->config->defaultGains[1];
+					predictedActions[i][2] = parameters->config->defaultGains[2];
+				}
 
-	return NULL;
+				servos->step(predictedActions, currentState);
+			}
+			else {
+				servos->ping(currentState);
+			}	
+		}
+	}
 }
 
 void* detectThread(void* args)
@@ -559,27 +476,33 @@ void* detectThread(void* args)
 				objY = roi.y + roi.height * 0.5;
 
 				// Determine error
-				tilt.error = frameCenterY - objY;
-				pan.error = frameCenterX - objX;
+				tilt.error = objY - frameCenterY;
+				pan.error = objX - frameCenterX;
 
 				// Enter State data
-				double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
-				pan.timestamp = elapsed;
-				tilt.timestamp = elapsed;
+				pan.point = roi.x;
+				tilt.point = roi.y;
+				pan.size = roi.width;
+				tilt.size = roi.height;
 				pan.Obj = objX;
 				tilt.Obj = objY;
 				pan.Frame = frameCenterX;
 				tilt.Frame = frameCenterY;
 				pan.done = false;
 				tilt.done = false;
+				
+				double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
+				pan.timestamp = elapsed;
+				tilt.timestamp = elapsed;
 
 				// Fresh data
-				if (pthread_mutex_lock(&stateDataLock) == 0) {
+				if (pthread_mutex_lock(&dataLock) == 0) {
 					eventDataArray[0] = tilt;
 					eventDataArray[1] = pan;
 					
-					pthread_mutex_unlock(&stateDataLock);
+					pthread_cond_broadcast(&dataCond);
 				}
+				pthread_mutex_unlock(&dataLock);
 
 				// draw to frame
 				if (draw) {
@@ -618,7 +541,7 @@ void* detectThread(void* args)
 
 					if (rechecked) {
 						rechecked = false;
-						goto validated;
+						goto validated; 
 					}
 
 					ED tilt;
@@ -631,13 +554,18 @@ void* detectThread(void* args)
 					objY = static_cast<double>(result.targetCenterY);
 
 					// Determine error (negative is too far left or too far above)
-					tilt.error = frameCenterY - objY;
-					pan.error = frameCenterX - objX;
+					tilt.error = objY - frameCenterY;
+					pan.error = objX - frameCenterX;
 
 					// Other State data
 					double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
 					pan.timestamp = elapsed;
 					tilt.timestamp = elapsed;
+
+					pan.point = static_cast<double>(result.boundingBox.x);
+					tilt.point = static_cast<double>(result.boundingBox.y);
+					pan.size = static_cast<double>(result.boundingBox.width);
+					tilt.size = static_cast<double>(result.boundingBox.height);
 					pan.Obj = objX;
 					tilt.Obj = objY;
 					pan.Frame = frameCenterX;
@@ -646,12 +574,13 @@ void* detectThread(void* args)
 					tilt.done = false;
 
 					// Fresh data
-					if (pthread_mutex_lock(&stateDataLock) == 0) {
+					if (pthread_mutex_lock(&dataLock) == 0) {
 						eventDataArray[0] = tilt;
 						eventDataArray[1] = pan;
 
-						pthread_mutex_unlock(&stateDataLock);
+						pthread_cond_broadcast(&dataCond);
 					}
+					pthread_mutex_unlock(&dataLock);
 
 					if (useTracking) {
 
@@ -666,7 +595,7 @@ void* detectThread(void* args)
 							// std::cout << "initialized!!" << std::endl;
 							// std::cout << "Tracking Target..." << std::endl;
 						}
-					}
+					} 
 				}
 				else {
 					lossCount++;
@@ -697,6 +626,10 @@ void* detectThread(void* args)
 						double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
 						pan.timestamp = elapsed;
 						tilt.timestamp = elapsed;
+						pan.point = 0;
+						tilt.point = 0;
+						pan.size = 0;
+						tilt.size = 0;
 						pan.Obj = objX;
 						tilt.Obj = objY;
 						pan.Frame = frameCenterX;
@@ -705,20 +638,14 @@ void* detectThread(void* args)
 						tilt.done = true;
 
 						// Fresh data
-						if (pthread_mutex_lock(&stateDataLock) == 0) {
+						if (pthread_mutex_lock(&dataLock) == 0) {
 							eventDataArray[0] = tilt;
 							eventDataArray[1] = pan;
 
-							if (parameters->config->useArduino) {
-								sendComand(0x8, 0x0, fd);
-							}
-							else {
-								runServo(0, 90.0);
-								runServo(1, 90.0);
-							}
-
-							pthread_mutex_unlock(&stateDataLock);
+							pthread_cond_broadcast(&dataCond);
 						}
+
+						pthread_mutex_unlock(&dataLock);
 					} 
 				}
 			}
@@ -750,38 +677,58 @@ void* autoTuneThread(void* args)
 {
 	param* parameters = (param*)args;
 	int batchSize = parameters->config->batchSize;
+	int sessions = parameters->config->maxTrainingSessions;
 	bool offPolicy = parameters->config->offPolicyTrain;
-	
-	while (true) {
-		
-		// Wait until there is enough data in the training buffer
-		while (!parameters->freshData) {
-			pthread_cond_wait(&trainCond, &trainLock);
-		}
+	double rate = parameters->config->trainRate;
 
+	// Wait for the buffer to fill
+	pthread_mutex_lock(&trainLock);
+	while (!parameters->freshData) {
+		pthread_cond_wait(&trainCond, &trainLock);
+	}
+	pthread_mutex_unlock(&trainLock);
+
+	while (true) {
 
 		if (offPolicy) {
-			TrainBuffer batch = replayBuffer->sample(batchSize);
-			pidAutoTuner->update(batchSize, &batch);
-			delay(1000);
-		} 
-		else {
-
-			TrainBuffer buff = replayBuffer->getCopy();
-			int numSamples = buff.size() / batchSize;
-			for (int sample = 1, m = 0; sample <= numSamples; sample += 1) {
-				int n = sample * batchSize - 1;
-				
-				TrainBuffer subBuf = slice(buff, m, n);
-				pidAutoTuner->update(batchSize, &subBuf);
-
-				m = n;
+			for (int i = 0; i < sessions; i += 1) {
+				TrainBuffer batch = replayBuffer->sample(batchSize, false);
+				pidAutoTuner->update(batch.size(), &batch);
 			}
 
-			replayBuffer->clear();
-			parameters->isTraining = false;
+			int milis = 1000 / rate;
+			Utility::msleep(milis);
+		}
+		else {
+			
+			pthread_mutex_lock(&trainLock);
+			while (!parameters->freshData) {
+				pthread_cond_wait(&trainCond, &trainLock);
+			}
+			pthread_mutex_unlock(&trainLock);
+
+			TrainBuffer buff = replayBuffer->getCopy();
+			for (int i = 0; i < sessions; i += 1) {
+				
+				replayBuffer->clear();
+				int numSamples = buff.size() / batchSize;
+				for (int sample = 1, m = 0; sample <= numSamples; sample += 1) {
+					int n = sample * batchSize - 1;
+
+					TrainBuffer subBuf = slice(buff, m, n);
+					pidAutoTuner->update(batchSize, &subBuf);
+
+					m = n + 1;
+				}
+
+				int milis = 1000 / rate;
+				Utility::msleep(milis);
+			}
+
 			parameters->freshData = false;
 		}
+
+		
 	}
 
 	return NULL;

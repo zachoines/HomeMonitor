@@ -16,6 +16,8 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 	_num_actions = num_actions;
 	_action_max = action_max;
 	_action_min = action_min;
+	_action_scale = (action_max - action_min) / 2.0;
+	_action_bias = (action_max + action_min) / 2.0;
 
 	_gamma = gamma;
 	_tau = tau;
@@ -27,7 +29,7 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 	// initialize networks
 	_q_net1 = new QNetwork(num_inputs, num_actions, num_hidden);
 	_q_net2 = new QNetwork(num_inputs, num_actions, num_hidden);
-	_policy_net = new PolicyNetwork(num_inputs, num_actions, num_hidden);
+	_policy_net = new PolicyNetwork(num_inputs, num_actions, num_hidden, 0.003, -20, 2, 0.001, action_max, action_min);
 	_value_network = new ValueNetwork(num_inputs, num_hidden);
 	_target_value_network = new ValueNetwork(num_inputs, num_hidden);
 	_target_entropy = -1 * num_actions;
@@ -87,23 +89,23 @@ void SACAgent::_save_to(torch::nn::Module& module, std::stringstream& fd) {
 }
 
 void SACAgent::_transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing) {
-	torch::autograd::GradMode::set_enabled(false);
+	// torch::autograd::GradMode::set_enabled(false);
 
 	auto to_params = to.named_parameters(true);
 	auto from_params = from.named_parameters(true);
 
 	for (auto& from_param : from_params) {
-		torch::Tensor new_value = from_param.value();
+		torch::Tensor new_value = from_param.value().clone().detach();
 
 		if (param_smoothing) {
-			torch::Tensor old_value = to_params[from_param.key()];
+			torch::Tensor old_value = to_params[from_param.key()].clone().detach();
 			new_value = _tau * new_value + (1.0 - _tau) * old_value;
 		} 
 		
 		to_params[from_param.key()].data().copy_(new_value);
 	}
 
-	torch::autograd::GradMode::set_enabled(true);
+	// torch::autograd::GradMode::set_enabled(true);
 }
 
 void SACAgent::_load_from(torch::nn::Module& module, std::stringstream& fd) {
@@ -205,28 +207,25 @@ bool SACAgent::load_checkpoint()
 	}
 }
 
-torch::Tensor SACAgent::get_action(torch::Tensor state)
+torch::Tensor SACAgent::get_action(torch::Tensor state, bool trainMode)
 {
-	at::Tensor results;
+	at::Tensor next;
 
 	if (pthread_mutex_lock(&_policyNetLock) == 0) {
-		results = _policy_net->forward(state);
+		next = _policy_net->sample(state, 1);
 		pthread_mutex_unlock(&_policyNetLock);
 	}
-	else {
-		throw "Could not obtain lock";
-	}
-	
-	at::Tensor mean = results[0];
-	at::Tensor log_std = results[1];
-	at::Tensor std = torch::exp(log_std);
 
-	Normal normal = Normal(mean, std);
-	torch::Tensor z = normal.sample();
-	z.set_requires_grad(false);
-	torch::Tensor actions = torch::tanh(z);
-	
-	return actions;
+	pthread_mutex_unlock(&_policyNetLock);
+
+	at::Tensor reshapedResult = next.view({ 5, 1, _num_actions });
+
+	if (trainMode) {
+		return torch::squeeze(reshapedResult[0]);
+	}
+	else {
+		return torch::squeeze(reshapedResult[2]); // Return the mean action
+	}
 }
 
 void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
@@ -263,7 +262,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	at::Tensor states_t = torch::from_blob(states, { batchSize, _num_inputs }, optionsDouble);
 	at::Tensor next_states_t = torch::from_blob(next_states, { batchSize, _num_inputs }, optionsDouble);
 	at::Tensor actions_t = torch::from_blob(actions, { batchSize, _num_actions }, optionsDouble);
-	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, optionsDouble);
+	at::Tensor rewards_t = torch::from_blob(rewards, { batchSize }, optionsDouble);\
 	at::Tensor dones_t = torch::from_blob(dones, { batchSize }, optionsDouble);
 
 	// Sample from Policy
@@ -275,7 +274,15 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	at::Tensor next_std = reshapedResult[3];
 	at::Tensor next_z_values = reshapedResult[4];
 	next_log_pi_t = next_log_pi_t.sum(1, true);
-
+	
+	std::cout << "Here are the average rewards" << rewards_t.mean() << std::endl;
+	std::cout << "Here are the states" << states_t << std::endl;
+	std::cout << "Here are the next actions: " << next_actions_t << std::endl;
+	// std::cout << "Here are the next log pi: " << next_log_pi_t << std::endl;
+	// std::cout << "Here are the next means: " << next_mean << std::endl;
+	// std::cout << "Here are the next stds: " << next_std << std::endl;
+	// std::cout << "Here are the next z values: " << next_z_values << std::endl;
+	
 	// Update alpha temperature
 	if (_self_adjusting_alpha) {
 
@@ -290,28 +297,22 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	// Estimated Q-Values
 	at::Tensor predicted_q_value1 = _q_net1->forward(states_t, actions_t);
 	at::Tensor predicted_q_value2 = _q_net2->forward(states_t, actions_t);
-	at::Tensor predicted_values = _value_network->forward(states_t);
 
 	// Training the Q-Value Function
 	at::Tensor target_values = _target_value_network->forward(next_states_t);
 	at::Tensor target_q_values = torch::unsqueeze(rewards_t, 1) + torch::unsqueeze(1.0 - dones_t, 1) * _gamma * target_values;
+	// std::cout << "Here are the pred target values: " << target_values << std::endl;
+	// std::cout << "Here are the target Q values: " << target_q_values << std::endl;
 	
-	at::Tensor q_value_loss1 = torch::nn::functional::mse_loss(predicted_q_value1, target_q_values.detach());
-	at::Tensor q_value_loss2 = torch::nn::functional::mse_loss(predicted_q_value2, target_q_values.detach());
+	at::Tensor q_value_loss1 = torch::mse_loss(predicted_q_value1, target_q_values.detach());
+	at::Tensor q_value_loss2 = torch::mse_loss(predicted_q_value2, target_q_values.detach());
 
 	// Training Value Function
-	at::Tensor predicted_new_q_value = torch::min(predicted_q_value1, predicted_q_value2);
-	at::Tensor target_value_func = predicted_new_q_value - _alpha * next_log_pi_t;
-	at::Tensor value_loss = torch::nn::functional::mse_loss(predicted_values, target_value_func.detach());
-	
-	/*at::Tensor policy_loss = (next_log_pi_t - predicted_new_q_value).mean();
-	
-	if (pthread_mutex_lock(&_policyNetLock) == 0) {
-	_policy_net->zero_grad();
-	policy_loss.backward();
-	_policy_net->optimizer->step();
-	_transfer_params_v2(*_value_network, *_target_value_network, true);
-	*/
+	at::Tensor value_predictions = _value_network->forward(states_t);
+
+	at::Tensor predicted_q_values = torch::min(_q_net1->forward(states_t, actions_t), _q_net2->forward(states_t, actions_t));
+	at::Tensor target_value_func = predicted_q_values - _alpha * next_log_pi_t;
+	at::Tensor value_loss = torch::mse_loss(value_predictions, target_value_func.detach());
 
 	// Update Q-Value networks
 	_q_net1->optimizer->zero_grad();
@@ -332,8 +333,8 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 		_current_update = 0;
 
 		// Train Policy Network 
-		at::Tensor advantages = torch::min(_q_net1->forward(states_t, actions_t), _q_net2->forward(states_t, actions_t)) - predicted_values.detach();
-		at::Tensor policy_loss = (_alpha * next_log_pi_t.sum(1, true) - advantages).mean();
+		at::Tensor advantages = torch::min(_q_net1->forward(states_t, actions_t), _q_net2->forward(states_t, actions_t)) - value_predictions.detach();
+		at::Tensor policy_loss = (_alpha * next_log_pi_t - advantages).mean();
 
 		// Regularization
 		at::Tensor mean_reg = 1e-3 * next_mean.pow(2).sum(1, true).mean();
@@ -344,6 +345,10 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 		policy_loss += actor_reg;
 
 		std::cout << "Policy Loss: " << policy_loss << std::endl;
+		std::cout << "Value Loss: " << value_loss << std::endl;
+		std::cout << "Q Loss 1: " << q_value_loss1 << std::endl;
+		std::cout << "Q Loss 2: " << q_value_loss2 << std::endl;
+
 
 		// Update Policy Network
 		if (pthread_mutex_lock(&_policyNetLock) == 0) {
@@ -353,6 +358,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 			pthread_mutex_unlock(&_policyNetLock);
 		}
 		else {
+			pthread_mutex_unlock(&_policyNetLock);
 			throw "could not obtain lock";
 		}
 

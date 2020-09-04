@@ -87,7 +87,7 @@ namespace Utility {
 		return retval;
 	}
 
-
+	
 	static int mapOutput(int x, int in_min, int in_max, int out_min, int out_max) {
 		return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 	}
@@ -121,7 +121,7 @@ namespace Utility {
 		return (int)(pwm * impulseMs / cycleMs + 0.5f);
 	}
 
-	static int runServo(int servo, double angle, int Hz = 50, int pinBase = 300, double minAngle = 0.0, double maxAngle = 180.0, double minMs = 0.5, double maxMs = 2.5) {
+	static int runServo(int servo, double angle, int Hz = 50, int pinBase = 300, double minAngle = -150.0, double maxAngle = 150.0, double minMs = 0.5, double maxMs = 2.5) {
 		double millis = Utility::mapOutput(angle, minAngle, maxAngle, minMs, maxMs);
 		int tick = calcTicks(millis, Hz);
 		pwmWrite(pinBase + servo, tick);
@@ -165,108 +165,249 @@ namespace Utility {
 		}
 	}
 
-	
-	static double errorToReward(int errorNew, int errorOld, int absMax, bool done, bool alt = false) {
-		// https://link.springer.com/article/10.1007/s11276-019-02225-x#Sec6
-
-		/*if (done) {
-			return -.50;
-		}*/
-
-		// if (!alt) {
-		double r1, r2;
-
-		// Scals
-		double epsilon = 0.001;
-		double alpha1 = .50;
-		double alpha2 = .50;
-
-		// ABS Errors
-		errorOld = (errorOld < 0) ? (-errorOld) : (errorOld);
-		errorNew = (errorNew < 0) ? (-errorNew) : (errorNew);
-
-		// convert from 0 to 1
-		double errorOldScaled = static_cast<double>(errorOld) / static_cast<double>(absMax);
-		double errorNewScaled = static_cast<double>(errorNew) / static_cast<double>(absMax);
-
-		if (errorNewScaled < epsilon) {
-			r1 = 0.0; 
-		}
-		else {
-			r1 = epsilon - errorNewScaled;
-		}
-
-		if (errorNewScaled <= errorOldScaled) {
-			r2 = 0.0;
-		}
-		else {
-			r2 = errorNewScaled - errorOldScaled;
-		}
-
-		return alpha1 * r1 + alpha2 * r2;
+	/*
+		If done state: -1.
+		Reward inverse of error, scaled from -1.0 to 0.0.
+	*/
+	static double errorToReward(double e, double max, bool d, double threshold = 0.01, bool alt = true) {
 		
-		//else {
-		//	/*
-		//		In short, reward ranges from -1.0 to 1.0
-		//		If done error: -1
-		//		Base reward from -0.5 to 0.5, plus additional bias for transitions that are good (and vic versa)
-		//		Bias is a exponential func from 0.0 to .50
+		double error = e;
+		double absMax = max;
+		double errorThreshold = threshold;
+		bool done = d;
 
-		//	*/
+		if (alt) {
 
-		//	// ABS Errors
-		//	errorOld = (errorOld < 0) ? (-errorOld) : (errorOld);
-		//	errorNew = (errorNew < 0) ? (-errorNew) : (errorNew);
+			/*if (done) {
+				return -1.0;
+			}*/
 
-		//	// Scale errors from 0.0 to 1.0
-		//	double errorOldScaled = static_cast<double>(errorOld) / static_cast<double>(absMax);
-		//	double errorNewScaled = static_cast<double>(errorNew) / static_cast<double>(absMax);
+			double r = 0.0;
+			error = std::fabs(error);
 
-		//	// Score the errors
-		//	double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -0.5, .5);
-		//	double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -0.5, .5);
+			// Scale errorsfrom 0.0 to 1.0
+			double errorScaled = error / absMax;
 
-		//	if (errorNewScore > errorOldScore) {
-		//		double percentBetter = 1.0 - abs(errorOldScore / errorNewScore);
-		//		double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)) * 0.5; // Exponential func from 0.0 to .5
-		//		return errorNewScore + bias;
-		//	}
-		//	else if (errorNewScore < errorOldScore) {
-		//		double percentWorse = 1.0 - abs(errorNewScore / errorOldScore);
-		//		double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0)) * 0.5;
+			// If within threshold
+			if (errorScaled <= errorThreshold) {
+				r = .50;
+			}
+			else {
+				r = errorThreshold - errorScaled;
+			}
 
-		//		return errorNewScore - bias;
-		//	}
-		//	else {
-		//		return errorNewScore;
-		//	}	
-		//}	
+			return r;
+		}
+		else {
+
+			if (done) {
+				return -1.0;
+			}
+
+			// ABS Error
+			error = std::fabs(error);
+
+			// Scale errors from 0.0 to 1.0
+			double errorScaled = error / absMax;
+
+			// If within threshhold
+			if (errorScaled <= errorThreshold) {
+				return 0.0;
+			}
+
+			// invert and scale from -1.0 to 0.0
+			double inverted = 1.0 - errorScaled;
+			double reward = mapOutput(inverted, 0.0, 1.0, -1.0, 0.0);
+
+			return reward;
+		}
 	}
 
-	static double errorToReward(int error, int absMax, bool done) {
+	/*	
+		/Base error + TD marginal increase/decrease
+		A.) If overshooting: -1.
+		B.) If done state: -3.
+		C.) Reward inverse of error, scaled from -1.0 to 0.0, plus an
+			additional bias that eponentially scales depending on percent difference. 
+		B.) If new error is worse than last, then return step 'C' minus an
+			additional bias that eponentially scales depending on percent difference.
+			max error is -2.
+	*/
+	static double pidErrorToReward(double n, double o, double max, bool d, double threshold = 0.01, bool alt = true) {
 
-		if (done) {
-			return -1.0;
+		if (alt) {
+
+			double absMax = max;
+			double errorThreshold = threshold;
+			bool done = d;
+
+			bool direction_old = false;
+			bool direction_new = false;
+			int center = absMax;
+
+			double r1 = 0.0;
+			double r2 = 0.0;
+
+			double absErrorNew = std::fabs(n);
+			double absErrorOld = std::fabs(o);
+
+			// Shift over to positive numbers
+			double errorNew = 0.0;
+			double errorOld = 0.0;
+			errorNew = mapOutput(n, -1.0 * absMax, absMax, 0.0, 2.0 * absMax);
+			errorOld = mapOutput(o, -1.0 * absMax, absMax, 0.0, 2.0 * absMax);
+
+			// scale from 0.0  to 1.0
+			double errorOldScaled = absErrorNew / absMax;
+			double errorNewScaled = absErrorOld / absMax;
+
+			// If within threshold
+			if (errorNewScaled <= errorThreshold) {
+				r1 = 0.5;
+			}
+			else {
+				r1 = errorThreshold - errorNewScaled;
+			}
+
+			// The target in ref to the center of frame. Left is F, right is T.
+			if (errorNew < center) { // target is left of frame center
+				direction_new = false;
+			}
+			else { // target is right of frame center
+				direction_new = true;
+			}
+
+			if (errorOld < center) { // target is left of frame center
+				direction_old = false;
+			}
+			else { // target is right of frame center
+				direction_old = true;
+			}
+
+			//  Both to the right of frame center, situation #1;
+			if (direction_old && direction_new) {
+
+				double reward = std::fabs(errorNewScaled - errorOldScaled);
+
+				if (errorNew > errorOld) { // frame center has moved furthure to object's left
+					r2 = -reward;
+				}
+				else { // frame center has moved closer to object's left
+					r2 = reward;
+				}
+			}
+
+			// both to left of frame center, situation #2
+			else if (!direction_old && !direction_new) {
+
+				double reward = std::fabs(errorOldScaled - errorNewScaled);
+
+				if (errorNew > errorOld) {  // frame center has moved closer to objects right
+					r2 = reward;
+				}
+				else { // frame center has moved further from objects right
+					r2 = -reward;
+				}
+
+			}
+
+			// Frame center has overshot target. Old to the right and new to the left, situation #3
+			else if (direction_old && !direction_new) {
+
+				double error_old_corrected = std::fabs(errorOld - absMax);
+				double error_new_corrected = std::fabs(errorNew - absMax);
+				double difference = std::fabs(error_new_corrected - error_old_corrected);
+				double reward = difference / absMax;
+
+				if (error_old_corrected < error_new_corrected) {  // If move has resulted in be relatively closer to center
+					r2 = reward;
+				}
+				else {
+					r2 = -reward;
+				}
+			}
+			else { // old left and new right, situation #4
+
+				double error_old_corrected = std::fabs(errorOld - absMax);
+				double error_new_corrected = std::fabs(errorNew - absMax);
+				double difference = std::fabs(error_new_corrected - error_old_corrected);
+				double reward = difference / absMax;
+
+				if (error_old_corrected < error_new_corrected) {  // If move has resulted in be relatively closer to center
+					r2 = reward;
+				}
+				else {
+					r2 = -reward;
+				}
+			}
+
+			return r1 + r2;
+		} else {
+			double absMax = max;
+			double errorThreshold = threshold;
+			bool done = d;
+			double errorNew = n;
+			double errorOld = o;
+
+			// Punish done state
+			if (done) {
+				return -3.0;
+			}
+
+			// puinish overshooting   
+			int signOld = errorOld >= 0 ? 1 : 0;
+			int signNew = errorNew >= 0 ? 1 : 0;
+
+			if (signOld - signNew != 0) {
+				return -1.0;
+			}
+			else {
+
+				// ABS Errors
+				errorOld = abs(errorOld);
+				errorNew = abs(errorNew);
+
+				// Scale errors from 0.0 to 1.0
+				double errorOldScaled = errorOld / static_cast<double>(absMax);
+				double errorNewScaled = errorNew / static_cast<double>(absMax);
+
+				// If within threshold
+				if (errorNewScaled <= errorThreshold) {
+					return 0.0;
+				}
+
+				// Score the errors 
+				double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -1.0, 0.0);
+				double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -1.0, 0.0);
+
+				if (errorNewScore >= errorOldScore) {
+					double percentBetter = 1.0 - abs(errorNewScore / errorOldScore);
+					double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)); // Exponential func from 0.0 to 1.0
+
+					return std::min(errorNewScore + bias, 0.0);
+				}
+				else {
+					double percentWorse = 1.0 - abs(errorOldScore / errorNewScore);
+					double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0));
+
+					return errorNewScore - bias;
+				}
+			}
 		}
-
-		// ABS Error
-		error = (error < 0) ? (-error) : (error);
-
-		// Scale errors from 0.0 to 1.0
-		double errorScaled = static_cast<double>(error) / static_cast<double>(absMax);
-
-		// invert and scale from -1.0 to 1.0
-		double inverted = 1.0 - errorScaled;
-		double reward = mapOutput(inverted, 0.0, 1.0, -1.0, 1.0);
-
-		return reward;
 	}
 
 	static double rescaleAction(double action, double min, double max) {
-		action = min + (action + 1.0) * 0.5 * (max - min);
-		action = std::clamp<double>(action, min, max);
+		// action = min + (action + 1.0) * 0.5 * (max - min);
+		 
+
+		/*double scale_factor = (max - min) / 2.0;
+		double reloc_factor = max - scale_factor;
+		action = action * scale_factor + reloc_factor;*/
+
+		// return std::clamp<double>(action * ((max - min) / 2.0) + ((max + min) / 2.0), min, max);
+		// return action * ((max - min) / 2.0) + ((max + min) / 2.0); 
+
 		return action;
-		// return action * (max - min) / 2.0 + (max + min) / 2.0;
 	}
 
 	static int printDirectory(const char* path) {
