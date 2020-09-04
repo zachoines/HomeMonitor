@@ -119,15 +119,14 @@ struct Config {
 		numHidden(NUM_HIDDEN),
 		numInput(NUM_INPUT),
 
-		maxBufferSize(1e4),
-		minBufferSize(128),
+		maxBufferSize(1e6),
+		minBufferSize(1e3),
 		maxTrainingSessions(1),
-		batchSize(32),
+		batchSize(128),
 		initialRandomActions(true),
-		numInitialRandomActions(1e3),
+		numInitialRandomActions(2e3),
 		trainMode(true), // When autotuning is on, use to execute means from network as PID gains and save to replay buffer..
-		defaultMode(false), // When autotuning is set to off, use to only execute the degault gains, otherwise query network 'means' as the PID gains.
-		frameSkip(true),
+		frameSkip(false),
 		numFrameSkip(4),
 
 		recheckChance(0.2),
@@ -158,7 +157,7 @@ struct Config {
 		angleLow(-70.0),
 		resetAngleX(0.0),
 		resetAngleY(-15.0),
-		offPolicyTrain(false)
+		offPolicyTrain(true)
 		{}
 } typedef cfg;
 

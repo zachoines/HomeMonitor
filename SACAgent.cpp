@@ -310,7 +310,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	// Training Value Function
 	at::Tensor value_predictions = _value_network->forward(states_t);
 
-	at::Tensor predicted_q_values = torch::min(_q_net1->forward(states_t, actions_t), _q_net2->forward(states_t, actions_t));
+	at::Tensor predicted_q_values = torch::min(_q_net1->forward(states_t, next_actions_t), _q_net2->forward(states_t, next_actions_t));
 	at::Tensor target_value_func = predicted_q_values - _alpha * next_log_pi_t;
 	at::Tensor value_loss = torch::mse_loss(value_predictions, target_value_func.detach());
 
