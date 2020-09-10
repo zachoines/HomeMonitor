@@ -16,6 +16,7 @@ QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, double init
 	linear1 = register_module("linear1", torch::nn::Linear(num_inputs + num_actions, hidden_size));
 	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
 	linear3 = register_module("linear3", torch::nn::Linear(hidden_size, 1));
+	// dropout = register_module("dropout", torch::nn::Dropout(torch::nn::DropoutOptions().p(0.5)));
 
 	torch::autograd::GradMode::set_enabled(false);
 	
@@ -26,19 +27,14 @@ QNetwork::QNetwork(int num_inputs, int num_actions, int hidden_size, double init
 	linear2->bias.uniform_(-init_w, init_w);
 	linear3->bias.uniform_(-init_w, init_w);
 
-	/*torch::nn::init::kaiming_normal_(linear1->weight);
-	torch::nn::init::kaiming_normal_(linear2->weight);
-	torch::nn::init::kaiming_normal_(linear3->weight);
-	linear1->bias.zero_();
-	linear2->bias.zero_();
-	linear3->bias.zero_();*/
-
-	// auto p = this->named_parameters(true);
-	//for (auto& val : p) {
-	//	std::cout << "Key: " << val.key() << ", Value: " << val.value() << std::endl;
-	//}
-
 	torch::autograd::GradMode::set_enabled(true);
+
+	linear1->weight.set_requires_grad(true);
+	linear2->weight.set_requires_grad(true);
+	linear3->weight.set_requires_grad(true);
+	linear1->bias.set_requires_grad(true);
+	linear2->bias.set_requires_grad(true);
+	linear3->bias.set_requires_grad(true);
 	
 	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
 }
@@ -48,13 +44,20 @@ QNetwork::~QNetwork()
 	delete optimizer;
 }
 
-torch::Tensor QNetwork::forward(torch::Tensor state, torch::Tensor actions)
+torch::Tensor QNetwork::forward(torch::Tensor state, torch::Tensor actions, bool eval)
 {
 	torch::Tensor X;
 
-	X = torch::leaky_relu(linear1->forward(torch::cat({ state, actions }, 1)));
-	X = torch::leaky_relu(linear2->forward(X));
+	// if (eval) {
+	X = torch::relu(linear1->forward(torch::cat({ state, actions }, 1)));
+	X = torch::relu(linear2->forward(X));
 	X = linear3->forward(X);
+	/*}
+	else {
+		X = dropout->forward(torch::relu(linear1->forward(torch::cat({ state, actions }, 1))));
+		X = dropout->forward(torch::relu(linear2->forward(X)));
+		X = linear3->forward(X);
+	}*/
 
 	return X;
 

@@ -7,9 +7,9 @@
 #include <string>
 #include "PID.h"
 
-#define NUM_INPUT 6
+#define NUM_INPUT 8
 #define NUM_ACTIONS 3
-#define NUM_HIDDEN 128
+#define NUM_HIDDEN 256
 
 struct EventData { 
 
@@ -49,6 +49,10 @@ struct StateData {
 	}
 
 } typedef SD;
+
+struct StepResults {
+	SD servos[2];
+} typedef SR;
 
 struct TrainData {
 	SD currentState;
@@ -101,7 +105,7 @@ struct Config {
 	double pidOutputLow;
 	double defaultGains[3];
 	int updateRate;
-	int trainRate;
+	double trainRate;
 	bool invertX;
 	bool invertY;
 	bool disableX;
@@ -119,20 +123,21 @@ struct Config {
 		numHidden(NUM_HIDDEN),
 		numInput(NUM_INPUT),
 
-		maxBufferSize(1e6),
+		maxBufferSize(1e5),
 		minBufferSize(1e3),
 		maxTrainingSessions(1),
 		batchSize(128),
 		initialRandomActions(true),
-		numInitialRandomActions(2e3),
+		numInitialRandomActions(5e3),
 		trainMode(true), // When autotuning is on, use to execute means from network as PID gains and save to replay buffer..
+		useAutoTuning(true), // Use SAC network to query for PID gains
 		frameSkip(false),
 		numFrameSkip(4),
 
 		recheckChance(0.2),
-		lossCountMax(1),
-		updateRate(30),
-		trainRate(1),
+		lossCountMax(2),
+		updateRate(10),
+		trainRate(0.08),
 		invertX(false),
 		invertY(true),
 		disableX(false),
@@ -143,16 +148,16 @@ struct Config {
 
 		trackerType(1),
 		useTracking(true),
-		useAutoTuning(true), // Use SAC network to query for PID gains
-		draw(true),
-		showVideo(true),
+		draw(false),
+		showVideo(false),
 		cascadeDetector(true),
 		target("face"),
-		actionHigh(0.2),
-		actionLow(0.0),
+		actionHigh(0.1),
+		actionLow(0.0001),
 		pidOutputHigh(70.0),
 		pidOutputLow(-70.0),
-		defaultGains({0.05, 0.0, 0.0}),
+		defaultGains({0.05, 0.04, 0.001}),
+		// defaultGains({ 0.0, 0.0, 0.0 }),
 		angleHigh(70.0),
 		angleLow(-70.0),
 		resetAngleX(0.0),

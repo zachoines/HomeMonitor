@@ -23,6 +23,8 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <cmath>
+#include <chrono>
+#include <thread>
 
 // 3rd party libs
 #include <wiringPiI2C.h>
@@ -31,9 +33,11 @@
 #include "opencv2/opencv.hpp"
 
 namespace Utility {
-	static int msleep(long msec)
+	static void msleep(long msec)
 	{
-		struct timespec ts;
+		
+		delay(msec);
+		/*struct timespec ts;
 		int res;
 
 		if (msec < 0)
@@ -49,7 +53,14 @@ namespace Utility {
 			res = nanosleep(&ts, &ts);
 		} while (res && errno == EINTR);
 
-		return res;
+		return res;*/
+		
+		/*using namespace std;
+
+		chrono::system_clock::time_point timePt =
+			chrono::system_clock::now() + chrono::milliseconds(msec);
+
+		this_thread::sleep_until(timePt);*/
 	}
 
 
@@ -170,17 +181,17 @@ namespace Utility {
 		Reward inverse of error, scaled from -1.0 to 0.0.
 	*/
 	static double errorToReward(double e, double max, bool d, double threshold = 0.01, bool alt = true) {
-		
-		double error = e;
+
+		double error = max - e;
 		double absMax = max;
 		double errorThreshold = threshold;
 		bool done = d;
 
 		if (alt) {
 
-			/*if (done) {
+			if (done) {
 				return -1.0;
-			}*/
+			}
 
 			double r = 0.0;
 			error = std::fabs(error);
@@ -236,10 +247,14 @@ namespace Utility {
 	static double pidErrorToReward(double n, double o, double max, bool d, double threshold = 0.01, bool alt = true) {
 
 		if (alt) {
-
+			
 			double absMax = max;
 			double errorThreshold = threshold;
 			bool done = d;
+
+			if (done) {
+				return -1.0;
+			}
 
 			bool direction_old = false;
 			bool direction_new = false;
@@ -248,36 +263,30 @@ namespace Utility {
 			double r1 = 0.0;
 			double r2 = 0.0;
 
-			double absErrorNew = std::fabs(n);
-			double absErrorOld = std::fabs(o);
+			double targetCenterNew = n;
+			double targetCenterOld = o;
 
-			// Shift over to positive numbers
-			double errorNew = 0.0;
-			double errorOld = 0.0;
-			errorNew = mapOutput(n, -1.0 * absMax, absMax, 0.0, 2.0 * absMax);
-			errorOld = mapOutput(o, -1.0 * absMax, absMax, 0.0, 2.0 * absMax);
-
-			// scale from 0.0  to 1.0
-			double errorOldScaled = absErrorNew / absMax;
-			double errorNewScaled = absErrorOld / absMax;
+			// scale from 0.0 to 1.0
+			double errorOldScaled = std::fabs(center - std::fabs(o)) / center;
+			double errorNewScaled = std::fabs(center - std::fabs(n)) / center;
 
 			// If within threshold
 			if (errorNewScaled <= errorThreshold) {
-				r1 = 0.5;
+				r1 = .5;
 			}
 			else {
 				r1 = errorThreshold - errorNewScaled;
 			}
 
 			// The target in ref to the center of frame. Left is F, right is T.
-			if (errorNew < center) { // target is left of frame center
+			if (targetCenterNew < center) { // target is left of frame center
 				direction_new = false;
 			}
 			else { // target is right of frame center
 				direction_new = true;
 			}
 
-			if (errorOld < center) { // target is left of frame center
+			if (targetCenterOld < center) { // target is left of frame center
 				direction_old = false;
 			}
 			else { // target is right of frame center
@@ -289,7 +298,7 @@ namespace Utility {
 
 				double reward = std::fabs(errorNewScaled - errorOldScaled);
 
-				if (errorNew > errorOld) { // frame center has moved furthure to object's left
+				if (targetCenterNew > targetCenterOld) { // frame center has moved furthure to object's left
 					r2 = -reward;
 				}
 				else { // frame center has moved closer to object's left
@@ -302,7 +311,7 @@ namespace Utility {
 
 				double reward = std::fabs(errorOldScaled - errorNewScaled);
 
-				if (errorNew > errorOld) {  // frame center has moved closer to objects right
+				if (targetCenterNew > targetCenterOld) {  // frame center has moved closer to objects right
 					r2 = reward;
 				}
 				else { // frame center has moved further from objects right
@@ -314,12 +323,12 @@ namespace Utility {
 			// Frame center has overshot target. Old to the right and new to the left, situation #3
 			else if (direction_old && !direction_new) {
 
-				double error_old_corrected = std::fabs(errorOld - absMax);
-				double error_new_corrected = std::fabs(errorNew - absMax);
+				double error_old_corrected = std::fabs(std::fabs(targetCenterOld) - center);
+				double error_new_corrected = std::fabs(std::fabs(targetCenterNew) - center);
 				double difference = std::fabs(error_new_corrected - error_old_corrected);
-				double reward = difference / absMax;
+				double reward = difference / center;
 
-				if (error_old_corrected < error_new_corrected) {  // If move has resulted in be relatively closer to center
+				if (error_old_corrected > error_new_corrected) {  // If move has resulted in be relatively closer to center
 					r2 = reward;
 				}
 				else {
@@ -328,12 +337,12 @@ namespace Utility {
 			}
 			else { // old left and new right, situation #4
 
-				double error_old_corrected = std::fabs(errorOld - absMax);
-				double error_new_corrected = std::fabs(errorNew - absMax);
+				double error_old_corrected = std::fabs(std::fabs(targetCenterOld) - center);
+				double error_new_corrected = std::fabs(std::fabs(targetCenterNew) - center);
 				double difference = std::fabs(error_new_corrected - error_old_corrected);
-				double reward = difference / absMax;
+				double reward = difference / center;
 
-				if (error_old_corrected < error_new_corrected) {  // If move has resulted in be relatively closer to center
+				if (error_old_corrected > error_new_corrected) {  // If move has resulted in be relatively closer to center
 					r2 = reward;
 				}
 				else {
@@ -342,6 +351,7 @@ namespace Utility {
 			}
 
 			return r1 + r2;
+
 		} else {
 			double absMax = max;
 			double errorThreshold = threshold;
@@ -397,16 +407,12 @@ namespace Utility {
 	}
 
 	static double rescaleAction(double action, double min, double max) {
-		// action = min + (action + 1.0) * 0.5 * (max - min);
-		 
 
 		/*double scale_factor = (max - min) / 2.0;
 		double reloc_factor = max - scale_factor;
-		action = action * scale_factor + reloc_factor;*/
-
+		action = (action * scale_factor) + reloc_factor;
+		return std::clamp<double>(action, min, max);*/
 		// return std::clamp<double>(action * ((max - min) / 2.0) + ((max + min) / 2.0), min, max);
-		// return action * ((max - min) / 2.0) + ((max + min) / 2.0); 
-
 		return action;
 	}
 

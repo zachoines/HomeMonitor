@@ -23,6 +23,7 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, d
 	// Set network structure
 	linear1 = register_module("linear1", torch::nn::Linear(num_inputs, hidden_size));
 	linear2 = register_module("linear2", torch::nn::Linear(hidden_size, hidden_size));
+	// dropout = register_module("dropout", torch::nn::Dropout(torch::nn::DropoutOptions().p(0.5)));
 	mean_Linear = register_module("mean_Linear", torch::nn::Linear(hidden_size, num_actions));
 	log_std_linear = register_module("log_std_linear", torch::nn::Linear(hidden_size, num_actions));
 
@@ -40,6 +41,15 @@ PolicyNetwork::PolicyNetwork(int num_inputs, int num_actions, int hidden_size, d
 
 	torch::autograd::GradMode::set_enabled(true);
 
+	linear1->weight.set_requires_grad(true);
+	linear2->weight.set_requires_grad(true);
+	mean_Linear->weight.set_requires_grad(true);
+	log_std_linear->weight.set_requires_grad(true);
+	linear1->bias.set_requires_grad(true);
+	linear2->bias.set_requires_grad(true);
+	mean_Linear->bias.set_requires_grad(true);
+	log_std_linear->bias.set_requires_grad(true);
+
 	optimizer = new torch::optim::Adam(this->parameters(), torch::optim::AdamOptions(learning_rate));
 }
 
@@ -47,46 +57,52 @@ PolicyNetwork::~PolicyNetwork() {
 	delete optimizer;
 }
 
-torch::Tensor PolicyNetwork::forward(torch::Tensor state) {
+torch::Tensor PolicyNetwork::forward(torch::Tensor state, bool eval) {
 	torch::Tensor X, mean, log_std;
 	 
-	X = torch::leaky_relu(linear1->forward(state));
-	X = torch::leaky_relu(linear2->forward(X));
-	mean = torch::tanh(mean_Linear->forward(X));
-	log_std = torch::tanh(log_std_linear->forward(X));
+	//if (eval) {
+	X = torch::relu(linear1->forward(state));
+	X = torch::relu(linear2->forward(X));
+	/*}
+	else {
+		X = dropout->forward(torch::relu(linear1->forward(state)));
+		X = dropout->forward(torch::relu(linear2->forward(X)));
+	}*/
 	
-	/*mean = mean_Linear->forward(X);
-	log_std = log_std_linear->forward(X);*/
 	
+	// mean = torch::tanh(mean_Linear->forward(X));
+	// log_std = torch::tanh(log_std_linear->forward(X));
 	// log_std = log_std_min + 0.5 * (log_std_max - log_std_min) * (log_std + 1.0);
-
+	
+	mean = mean_Linear->forward(X);
+	log_std = log_std_linear->forward(X);
 	log_std = torch::clamp(log_std, log_std_min, log_std_max);
 
 	return torch::cat({ { mean }, { log_std } }, 0);
 }
 
 
-torch::Tensor PolicyNetwork::sample(torch::Tensor state, int batchSize, double epsilon) {
+torch::Tensor PolicyNetwork::sample(torch::Tensor state, int batchSize, double epsilon, bool eval) {
 
-	torch::Tensor X, mean, log_std, std, z, action, log_prob, log_pi;
-
-	at::Tensor result = this->forward(state);
+	at::Tensor result = this->forward(state, eval);
 	at::Tensor reshapedResult = result.view({ 2, batchSize, num_actions });
 
-	mean = reshapedResult[0];
-	log_std = reshapedResult[1];
-	std = torch::exp(log_std);
+	torch::Tensor mean = reshapedResult[0];
+	torch::Tensor log_std = reshapedResult[1];
+	torch::Tensor std = torch::exp(log_std);
                                                                                                                   
 	Normal normal = Normal(mean, std); 
-	z = normal.rsample();
+	torch::Tensor z = normal.rsample(); // Reparameterization
+	torch::Tensor action = torch::tanh(z);
+	torch::Tensor log_probs = normal.log_prob(z);
 
-	action = torch::tanh(z) * _action_scale + _action_bias;
-	mean = mean * _action_scale + _action_bias;
-	log_pi = normal.log_prob(z) - torch::log(_action_scale * (1.0 - action.pow(2)) + epsilon);
+	// Rescale to action bounds
+	torch::Tensor action_scaled = action * _action_scale + _action_bias;
+	torch::Tensor log_probs_scaled = log_probs - torch::log(_action_scale * (1.0 - action.pow(2)) + epsilon);
+	torch::Tensor mean_scaled = torch::tanh(mean) * _action_scale + _action_bias;
 	
-	/*action = torch::tanh(z);
-	log_pi = normal.log_prob(z) - torch::log(1.0 - action.pow(2) + epsilon);*/
+	// log_probs = log_probs - torch::log(1.0 - action.pow(2) + epsilon);
 
-	return torch::cat({ { action }, {log_pi}, { mean }, { std }, { z } }, 0);
+	return torch::cat({ { action_scaled }, {log_probs_scaled}, { mean_scaled}, { std }, { z } }, 0);
 
 }

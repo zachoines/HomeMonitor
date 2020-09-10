@@ -16,8 +16,8 @@ Env::Env(param* parameters, pthread_mutex_t* stateDataLock, pthread_cond_t* stat
 	_disableServo[0] = parameters->config->disableY;
 	_disableServo[1] = parameters->config->disableX;
 
-	_pids[0] = parameters->pan;
-	_pids[1] = parameters->tilt;
+	_pids[0] = parameters->tilt;
+	_pids[1] = parameters->pan;
 
 	_currentAngles[0] = 0.0;
 	_currentAngles[1] = 0.0;
@@ -29,155 +29,54 @@ Env::Env(param* parameters, pthread_mutex_t* stateDataLock, pthread_cond_t* stat
 
 	_invert[0] = _params->config->invertY;
 	_invert[1] = _params->config->invertX;
+
 }
 
-void Env::_updateState(ED data[2])
+void Env::_updateState()
 {
-
-	_errorCounter = (_errorCounter + 1) % 3;
 
 	for (int i = 0; i < 2; i++) {
 		if (_disableServo[i]) {
 			continue;
 		}
-		if (data[i].done) {
+		if (_currentData[i].done) {
 			resetEnv();
 		}
-		
 
 		// Normalize and fill out the current state
 		double scale = static_cast<double>(_params->dims[i]) / 2.0;
-		/*_lastTimeStamp[i] = data[i].timestamp;
-		_stateData[i][0][_errorCounter] = data[i].timestamp;
-		_stateData[i][1][_errorCounter] = data[i].error / scale;
-		_stateData[i][2][_errorCounter] = data[i].Frame / scale;
-		_stateData[i][3][_errorCounter] = data[i].Obj / scale;
-		_stateData[i][4][_errorCounter] = data[i].point / scale;
-		_stateData[i][5][_errorCounter] = data[i].size / scale;
-		_stateData[i][6][_errorCounter] = _currentAngles[i] / _params->config->angleHigh;
-
-		int k, j;
-		double key;
-		double key2;
-		double key3;
-		double key4;
-		double key5;
-		double key6;
-		double key7;
-
-		for (k = 1; k < 3; k++)
-		{
-			key = _stateData[i][0][k];
-			key2 = _stateData[i][1][k];
-			key3 = _stateData[i][2][k];
-			key4 = _stateData[i][3][k];
-			key5 = _stateData[i][4][k];
-			key6 = _stateData[i][5][k];
-			key7 = _stateData[i][6][k];
-
-			j = k - 1;
-
-			while (j >= 0 && _stateData[i][0][j] > key)
-			{
-				_stateData[i][0][j + 1] = _stateData[i][0][j];
-				_stateData[i][1][j + 1] = _stateData[i][1][j];
-				_stateData[i][2][j + 1] = _stateData[i][2][j];
-				_stateData[i][3][j + 1] = _stateData[i][3][j];
-				_stateData[i][4][j + 1] = _stateData[i][4][j];
-				_stateData[i][5][j + 1] = _stateData[i][5][j];
-				_stateData[i][6][j + 1] = _stateData[i][6][j];
-
-				j = j - 1;
-			}
-			_stateData[i][0][j + 1] = key;
-			_stateData[i][1][j + 1] = key2;
-			_stateData[i][2][j + 1] = key3;
-			_stateData[i][3][j + 1] = key4;
-			_stateData[i][4][j + 1] = key5;
-			_stateData[i][5][j + 1] = key6;
-			_stateData[i][6][j + 1] = key7;
-		}*/
-
 		double state[_params->config->numInput];
 
-		// Last two errors
-		state[0] = _currentData[i].error / scale;
-		state[1] = _lastData[i].error / scale;
-
-		// Send in the last two angles
-		state[2] = _currentAngles[i] / _params->config->angleHigh;
-		state[3] = _lastAngles[i] / _params->config->angleHigh;
-
-		// PID gains
-		double pid[3] = {
+		_lastTimeStamp[i] = _currentData[i].timestamp;
+		
+		double gains[3] = {
 			0.0
 		};
 
-		// Send in last integral and dirivitive 
-		_pids[i]->getPID(pid);
-		state[4] = pid[1] / scale;
-		state[5] = pid[2] / (scale);
+		_pids[i]->getPID(gains);
+
+		// Last angle history
+		state[0] = _currentAngles[i] / _params->config->angleHigh;
+		state[1] = _lastAngles[i] / _params->config->angleHigh;
+
+		// Last error history
+		state[2] = (_currentData[i].Obj - (static_cast<double>(_params->dims[i]) / 2.0)) / scale;
+		state[3] = (_lastData[i].Obj - (static_cast<double>(_params->dims[i]) / 2.0)) / scale;
+
+		// Integral and dirivative from PID
+		state[4] = gains[1] / scale;
+		state[5] = gains[2] / scale;
+
+		// Last target locations
+		state[6] = _currentData[i].Obj / scale;
+		state[7] = _lastData[i].Obj / scale;
 
 		_lastState[i] = _currentState[i];
 		_currentState[i].setStateArray(state);
 
-		/*	
-		// Error, e(t) = y′(t) - y(t)
-		state[0] = _stateData[i][1][2];
-
-		// First order error, e(t) - e(t−1)
-		state[1] = state[0] - _stateData[i][1][1];
-
-		// Second order error, e(t) − 2∗e(t−1) + e(t−2)
-		state[2] = state[0] - 2.0 * _stateData[i][1][1] + _stateData[i][1][0];
-
-		state[3] = _stateData[i][2][0];
-		state[4] = _stateData[i][2][1];
-		state[5] = _stateData[i][2][2];
-		state[6] = _stateData[i][3][0];
-		state[7] = _stateData[i][3][1];
-		state[8] = _stateData[i][3][2];
-
-		// Last three frame/object size, location, and center data
-		state[9] = _stateData[i][4][0];
-		state[10] = _stateData[i][4][1];
-		state[11] = _stateData[i][4][2];
-		state[12] = _stateData[i][5][0];
-		state[13] = _stateData[i][5][1];
-		state[14] = _stateData[i][5][2];
-
-
-		/*double weights[3] = {
-			0.0
-		};
-
-		_pids[i]->getWeights(weights);
-		state[15] = weights[0];
-		state[16] = weights[1];
-		state[17] = weights[2];*/
 		if (!_lastData[i].done) {
 			_hasData = true;
 		}
-	}
-}
-
-void Env::_getCurrentState(SD currentStates[2])
-{
-	for (int i = 0; i < 2; i++) {
-		if (_disableServo[i]) {
-			continue;
-		}
-		currentStates[i] = _currentState[i];
-	}
-}
-
-void Env::_getLastState(SD lastState[2])
-{
-	for (int i = 0; i < 2; i++) {
-		if (_disableServo[i]) {
-			continue;
-		}
-		lastState[i] = _lastState[i];
 	}
 }
 
@@ -187,7 +86,7 @@ void Env::_sleep()
 	Utility::msleep(milis);
 }
 
-bool Env::init(SD currentState[2])
+bool Env::init()
 {
 	if (pthread_mutex_lock(_lock) == 0) {
 		for (int i = 0; i < 2; i++) {
@@ -204,18 +103,16 @@ bool Env::init(SD currentState[2])
 		return false;
 	}
 
-	_updateState(_currentData);
-	_getCurrentState(currentState);
+	_updateState();
 
 	return true;
 }
 
-void Env::ping(SD currentState[2])
+void Env::ping()
 {
 	_resetData();
 	_syncEnv();
-	_updateState(_currentData);
-	_getCurrentState(currentState);
+	_updateState();
 }
 
 void Env::_syncEnv()
@@ -241,8 +138,10 @@ void Env::_syncEnv()
 	pthread_mutex_unlock(_lock);
 }
 
-void Env::step(double actions[2][3], SD currentState[2])
+void Env::step(double actions[2][3])
 {
+
+	SD currentState[2];
 
 	_lastReward[0] = 0.0;
 	_lastReward[1] = 0.0;
@@ -268,7 +167,7 @@ void Env::step(double actions[2][3], SD currentState[2])
 			}
 
 			// Print out the PID gains
-			if (0.01 >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
+			if (0.1 >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
 				std::cout << "Here are the gains: ";
 				for (int a = 0; a < _params->config->numActions; a++) {
 					std::cout << actions[servo][a] << ", ";
@@ -291,9 +190,7 @@ void Env::step(double actions[2][3], SD currentState[2])
 					continue;
 				}
 
-				double newAngle = _pids[servo]->update(_currentData[servo].error, 0);
-				// double newAngle = _pids[servo]->update(_currentData[servo].error / (static_cast<double>(_params->dims[servo] / 2.0)), 0);
-				// double newAngle = actions[servo][0];
+				double newAngle = _pids[servo]->update(_currentData[servo].Obj, 1000.0 / static_cast<double>(_params->rate));
 				newAngle = Utility::mapOutput(newAngle, _params->config->pidOutputLow, _params->config->pidOutputHigh, _params->config->angleLow, _params->config->angleHigh);
 				
 				if (_invert[servo]) {
@@ -318,14 +215,14 @@ void Env::step(double actions[2][3], SD currentState[2])
 				double currentError = _currentData[i].error;
 
 				if (_lastData[i].done) {
-					_lastReward[i] =+ Utility::errorToReward(currentError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.01, true);
+					_lastReward[i] =+ Utility::errorToReward(currentError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.02, true) / static_cast<double>(_params->config->numFrameSkip);
 				}
 				else {
-					_lastReward[i] =+ Utility::pidErrorToReward(currentError, lastError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.01, true);
+					_lastReward[i] =+ Utility::pidErrorToReward(currentError, lastError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.02, true) / static_cast<double>(_params->config->numFrameSkip);
 				}
 			}
 
-			_updateState(_currentData);	
+			_updateState();	
 
 			// Ran into a terminal state, no more steps can be taken
 			for (int i = 0; i < 2; i++) {
@@ -344,12 +241,13 @@ void Env::step(double actions[2][3], SD currentState[2])
 						_lastState[k] = _tempState[k];
 					}
 					
-					goto done;
+					return;
 				}
 			}
 		}
 	}
 	else {
+		double randChance = static_cast<float>(rand()) / static_cast <float> (RAND_MAX);
 		for (int servo = 0; servo < 2; servo++) {
 
 			if (_disableServo[servo]) {
@@ -362,7 +260,7 @@ void Env::step(double actions[2][3], SD currentState[2])
 			}
 			
 			// Print out the PID gains
-			if (0.01 >= static_cast<float>(rand()) / static_cast <float> (RAND_MAX)) {
+			if (0.01 >= randChance) {
 				std::cout << "Here are the gains: ";
 				for (int a = 0; a < _params->config->numActions; a++) {
 					std::cout << actions[servo][a] << ", ";
@@ -376,9 +274,7 @@ void Env::step(double actions[2][3], SD currentState[2])
 
 			_pids[servo]->setWeights(actions[servo][0], actions[servo][1], actions[servo][2]);
 
-			double newAngle = _pids[servo]->update(_currentData[servo].error, 0);
-			// double newAngle = _pids[servo]->update(_currentData[servo].error / (static_cast<double>(_params->dims[servo]) / 2.0), 0);
-			// double newAngle = actions[servo][0];
+			double newAngle = _pids[servo]->update(_currentData[servo].Obj, 1000.0 / static_cast<double>(_params->rate));
 			newAngle = Utility::mapOutput(newAngle, _params->config->pidOutputLow, _params->config->pidOutputHigh, _params->config->angleLow, _params->config->angleHigh);
 			_lastAngles[servo] = _currentAngles[servo];
 			_currentAngles[servo] = newAngle;
@@ -387,7 +283,6 @@ void Env::step(double actions[2][3], SD currentState[2])
 				newAngle = _params->config->angleHigh - newAngle;
 			}
 
-			std::cout << "For servo: " << servo << ", the angle is: " << newAngle << "." << std::endl;
 			Utility::runServo(servo, newAngle);
 		}
 
@@ -399,18 +294,24 @@ void Env::step(double actions[2][3], SD currentState[2])
 				continue;
 			}
 
-			double lastError = _lastData[i].error;
-			double currentError = _currentData[i].error;
+			double lastError = _lastData[i].Obj;
+			double currentError = _currentData[i].Obj;
 
 			if (_lastData[i].done) {
-				_lastReward[i] = Utility::errorToReward(currentError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.01, true);
+				_lastReward[i] = Utility::errorToReward(currentError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.02, true) / 2.0;
 			}
 			else {
-				_lastReward[i] = Utility::pidErrorToReward(currentError, lastError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.01, true);
+				_lastReward[i] = Utility::pidErrorToReward(currentError, lastError, static_cast<double>(_params->dims[i]) / 2.0, _currentData[i].done, 0.02, true) / 2.0;
 			}
+
+			// print out the data tuple
+			if (0.01 >= randChance) {
+				std::cout << "Here is last Error, current Error, and reward: (" << lastError << ", " << currentError << ", " << _lastReward[i] << ")" << std::endl;
+			}
+			
 		}
 
-		_updateState(_currentData);
+		_updateState();
 
 		// Ran into a terminal state, no more steps can be taken
 		for (int i = 0; i < 2; i++) {
@@ -420,13 +321,12 @@ void Env::step(double actions[2][3], SD currentState[2])
 			}
 
 			if (_currentData[i].done) {
-				goto done;
+				return;
 			}
 		}
 	}
 
-	done:
-	_getCurrentState(currentState);
+	
 }
 
 void Env::getResults(TD trainData[2])
@@ -481,15 +381,60 @@ void Env::_resetData()
 {
 	_hasData = false;
 
+	std::memset(_stateData, 0.0, sizeof _stateData);
+	std::memset(_lastActions, 0.0, sizeof _lastActions);
+
 	for (int i = 0; i < 2; i++) {
 		_errorCounter = -1;
-		std::memset(_stateData, 0.0, sizeof _stateData);
 
 		_currentData[i].reset();
-		_lastData[i].reset();
-		std::memset(_lastActions, 0.0, sizeof _lastActions);
+		_lastData[i].reset();	
 
 		_lastAngles[i] = _resetAngles[i];
 		_currentAngles[i] = _resetAngles[i];
 	}
 }
+
+
+
+/*
+	int num_inputs = 2;
+	int num_keys = 7;
+	_errorCounter = (_errorCounter + 1) % num_inputs;
+
+	_stateData[i][0][_errorCounter] = data[i].timestamp;
+	_stateData[i][1][_errorCounter] = (data[i].Obj - (static_cast<double>(_params->dims[i]) / 2.0));
+	_stateData[i][2][_errorCounter] = data[i].Frame / scale;
+	_stateData[i][3][_errorCounter] = data[i].Obj / scale;
+	_stateData[i][4][_errorCounter] = data[i].point / scale;
+	_stateData[i][5][_errorCounter] = data[i].size / scale;
+	_stateData[i][6][_errorCounter] = _currentAngles[i];
+
+	int k, j;
+
+	double keys[num_keys];
+
+	// Insertion sort by timestamp
+	for (k = 1; k < num_inputs; k++)
+	{
+		for (int h = 0; h < num_keys; h++) {
+			keys[h] = _stateData[i][h][k];
+		}
+
+		j = k - 1;
+
+		while (j >= 0 && _stateData[i][0][j] > _stateData[i][0][k])
+		{
+			for (int h = 0; h < num_keys; h++) {
+				_stateData[i][h][j + 1] = _stateData[i][h][j];
+			}
+
+			j = j - 1;
+		}
+
+		for (int h = 0; h < num_keys; h++) {
+			_stateData[i][h][j + 1] = keys[h];
+		}
+
+	} 
+	*/

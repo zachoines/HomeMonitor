@@ -3,9 +3,9 @@
 class PID
 {
 	public:
-		PID(double kP, double kI, double kD, double min, double max);
+		PID(double kP, double kI, double kD, double min, double max, double setpoint);
 		void init();
-		double update(double error, int sleep = 0.0);
+		double update(double input, double sleep = 0.0);
 		void getWeights(double w[3]);
 		void setWeights(double kP, double kI, double kD);
 		void getPID(double w[3]);
@@ -34,8 +34,9 @@ class PID
 
 		double _prevError;
 		double _integral;
-		double _dt;		
 
 		double _windup_guard;
+		double _setpoint;
+		double _last_input;
 };
 

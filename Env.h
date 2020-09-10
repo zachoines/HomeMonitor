@@ -18,7 +18,7 @@ private:
 		0.0
 	};
 
-	double _stateData[2][8][3] = {
+	double _stateData[2][7][2] = {
 		0.0
 	};
 
@@ -43,18 +43,16 @@ private:
 
 	int _errorCounter;
 
-	void _updateState(ED data[2]);
-	void _getCurrentState(SD currentStates[2]);
-	void _getLastState(SD currentState[2]);
+	void _updateState();
 	void _sleep();
 	void _syncEnv();
 	void _resetData();
 public:
 	Env(param* parameters, pthread_mutex_t* stateDataLoc, pthread_cond_t* stateDataCond);
 	void resetEnv(); // Resets servos and re-inits PID's. Call only once manually.
-	bool init(SD currentState[2]); // Call once at beginning of program. Resets internal state, returns current env state. 
-	void ping(SD currentState[2]); // Sync with dection results
-	void step(double actions[2][3], SD currentState[2]);  // Steps with actions and waits for Env to update, then returns the current state.
+	bool init(); // Call once at beginning of program. Resets internal state, returns current env state. 
+	void ping(); // Sync with dection results
+	void step(double actions[2][3]);  // Steps with actions and waits for Env to update, then returns the current state.
 	void getResults(TD trainData[2]); // Call after stepping for temporal transition results from env. 
 	bool isDone();
 	bool hasData();

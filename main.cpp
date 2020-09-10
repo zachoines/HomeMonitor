@@ -116,12 +116,6 @@ int main(int argc, char** argv)
 	torch::set_default_dtype(default_dtype);
 	param* parameters = (param*)malloc(sizeof(param));
 	parameters->config = new Config();
-	PID* pan = new PID(parameters->config->defaultGains[0], parameters->config->defaultGains[1], parameters->config->defaultGains[2], parameters->config->pidOutputLow, parameters->config->pidOutputHigh);
-	PID* tilt = new PID(parameters->config->defaultGains[0], parameters->config->defaultGains[1], parameters->config->defaultGains[2], parameters->config->pidOutputLow, parameters->config->pidOutputHigh);
-	parameters->pan = pan;
-	parameters->tilt = tilt;
-	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, parameters->config->actionHigh, parameters->config->actionLow);
-	replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize);
 
 	// Setup Torch
 	if (torch::cuda::is_available()) {
@@ -170,8 +164,15 @@ int main(int argc, char** argv)
 	int height = test.rows;
 	int width = test.cols;
 
-	parameters->dims[0] = height;
 	parameters->dims[1] = width;
+	parameters->dims[0] = height;
+
+	PID* pan = new PID(parameters->config->defaultGains[0], parameters->config->defaultGains[1], parameters->config->defaultGains[2], parameters->config->pidOutputLow, parameters->config->pidOutputHigh, static_cast<double>(parameters->dims[1]) / 2.0);
+	PID* tilt = new PID(parameters->config->defaultGains[0], parameters->config->defaultGains[1], parameters->config->defaultGains[2], parameters->config->pidOutputLow, parameters->config->pidOutputHigh, static_cast<double>(parameters->dims[0]) / 2.0);
+	parameters->pan = pan;
+	parameters->tilt = tilt;
+	pidAutoTuner = new SACAgent(parameters->config->numInput, parameters->config->numHidden, parameters->config->numActions, parameters->config->actionHigh, parameters->config->actionLow);
+	replayBuffer = new ReplayBuffer(parameters->config->maxBufferSize);
 
 	if (parameters->config->useArduino) {
 		sendComand(0x8, 0x0, fd); // Reset servos
@@ -214,11 +215,7 @@ void* panTiltThread(void* args) {
 	std::mt19937 eng{ std::random_device{}() };
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
-
 	Env* servos = new Env(parameters, &dataLock, &dataCond);
-	// PIDs
-	PID* pan = parameters->pan;
-	PID* tilt = parameters->tilt;
 
 	// training state variables
 	bool initialRandomActions = parameters->config->initialRandomActions;
@@ -235,7 +232,7 @@ void* panTiltThread(void* args) {
 
 	servos->resetEnv();
 
-	if (!servos->init(currentState)) {
+	if (!servos->init()) {
 		throw "Could not initialize servos and pid's";
 	}
 
@@ -253,6 +250,7 @@ void* panTiltThread(void* args) {
 						if (initialRandomActions && numInitialRandomActions >= 0) {
 
 							numInitialRandomActions--;
+							std::cout << "Random action count: " << numInitialRandomActions << std::endl;
 							for (int a = 0; a < parameters->config->numActions; a++) {
 								predictedActions[i][a] = std::uniform_real_distribution<double>{ parameters->config->actionLow, parameters->config->actionHigh }(eng);;
 							}
@@ -289,7 +287,7 @@ void* panTiltThread(void* args) {
 					
 				}
 
-				servos->step(predictedActions, currentState);
+				servos->step(predictedActions);
 
 				if (trainMode) {
 
@@ -312,7 +310,7 @@ void* panTiltThread(void* args) {
 				}
 			}
 			else {
-				servos->ping(currentState);
+				servos->ping();
 			}
 		}
 		else {
@@ -323,10 +321,10 @@ void* panTiltThread(void* args) {
 					predictedActions[i][2] = parameters->config->defaultGains[2];
 				}
 
-				servos->step(predictedActions, currentState);
+				servos->step(predictedActions);
 			}
 			else {
-				servos->ping(currentState);
+				servos->ping();
 			}	
 		}
 	}
@@ -415,6 +413,8 @@ void* detectThread(void* args)
 	HM::CascadeDetector cd;
 	HM::DetectionData result;
 
+	double lastError = -1;
+
 	while (true) {
 
 		if (isSearching) {
@@ -476,8 +476,8 @@ void* detectThread(void* args)
 				objY = roi.y + roi.height * 0.5;
 
 				// Determine error
-				tilt.error = objY - frameCenterY;
-				pan.error = objX - frameCenterX;
+				tilt.error = frameCenterY - objY;
+				pan.error = frameCenterX - objX;
 
 				// Enter State data
 				pan.point = roi.x;
@@ -490,6 +490,8 @@ void* detectThread(void* args)
 				tilt.Frame = frameCenterY;
 				pan.done = false;
 				tilt.done = false;
+
+				lastError = objX;
 				
 				double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
 				pan.timestamp = elapsed;
@@ -554,8 +556,10 @@ void* detectThread(void* args)
 					objY = static_cast<double>(result.targetCenterY);
 
 					// Determine error (negative is too far left or too far above)
-					tilt.error = objY - frameCenterY;
-					pan.error = objX - frameCenterX;
+					tilt.error = frameCenterY - objY;
+					pan.error = frameCenterX - objX;
+					/*tilt.error = objY;
+					pan.error = objX;*/
 
 					// Other State data
 					double elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - execbegin).count() * 1e-9;
@@ -696,7 +700,7 @@ void* autoTuneThread(void* args)
 				pidAutoTuner->update(batch.size(), &batch);
 			}
 
-			int milis = 1000 / rate;
+			long milis = static_cast<long>(1000.0 / rate);
 			Utility::msleep(milis);
 		}
 		else {
