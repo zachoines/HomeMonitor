@@ -107,7 +107,6 @@ namespace Utility {
 		return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 	}
 
-	// Return response data
 	static void sendComand(unsigned char command, unsigned char data, int fd) {
 		unsigned short finalCommand = (command << 8) + data;
 		wiringPiI2CWriteReg16(fd, 0, finalCommand);
@@ -176,10 +175,6 @@ namespace Utility {
 		}
 	}
 
-	/*
-		If done state: -1.
-		Reward inverse of error, scaled from -1.0 to 0.0.
-	*/
 	static double errorToReward(double e, double max, bool d, double threshold = 0.01, bool alt = true) {
 
 		double error = max - e;
@@ -189,9 +184,9 @@ namespace Utility {
 
 		if (alt) {
 
-			if (done) {
+			/*if (done) {
 				return -1.0;
-			}
+			}*/
 
 			double r = 0.0;
 			error = std::fabs(error);
@@ -234,31 +229,30 @@ namespace Utility {
 		}
 	}
 
-	/*	
-		/Base error + TD marginal increase/decrease
-		A.) If overshooting: -1.
-		B.) If done state: -3.
-		C.) Reward inverse of error, scaled from -1.0 to 0.0, plus an
-			additional bias that eponentially scales depending on percent difference. 
-		B.) If new error is worse than last, then return step 'C' minus an
-			additional bias that eponentially scales depending on percent difference.
-			max error is -2.
+	/* 
+
+		Reward bounds are -2.0 to +1.5:
+
+		+.5 bonus for within 2% error
+		0.0 to +1.0 reward for marginally better transitions
+
+		-1.0 punishment for done state
+		0.0 to -1.0 punishment for marginally worse transitions
+
 	*/
-	static double pidErrorToReward(double n, double o, double max, bool d, double threshold = 0.01, bool alt = true) {
+
+	static double pidErrorToReward(double n, double o, double max, bool d, double threshold = 0.02, bool alt = true) {
+
+
+		double absMax = max;
+		double errorThreshold = threshold;
+		bool done = d;
+		double center = absMax;
 
 		if (alt) {
 			
-			double absMax = max;
-			double errorThreshold = threshold;
-			bool done = d;
-
-			if (done) {
-				return -1.0;
-			}
-
 			bool direction_old = false;
 			bool direction_new = false;
-			int center = absMax;
 
 			double r1 = 0.0;
 			double r2 = 0.0;
@@ -270,12 +264,13 @@ namespace Utility {
 			double errorOldScaled = std::fabs(center - std::fabs(o)) / center;
 			double errorNewScaled = std::fabs(center - std::fabs(n)) / center;
 
-			// If within threshold
-			if (errorNewScaled <= errorThreshold) {
-				r1 = .5;
+			if (done) {
+				r1 -= 1.0;
+			} else if (errorNewScaled <= errorThreshold) {
+				r1 += 0.5;
 			}
 			else {
-				r1 = errorThreshold - errorNewScaled;
+				// r1 -= (errorNewScaled - errorThreshold);
 			}
 
 			// The target in ref to the center of frame. Left is F, right is T.
@@ -328,7 +323,7 @@ namespace Utility {
 				double difference = std::fabs(error_new_corrected - error_old_corrected);
 				double reward = difference / center;
 
-				if (error_old_corrected > error_new_corrected) {  // If move has resulted in be relatively closer to center
+				if (error_old_corrected > error_new_corrected) {  // If move has resulted in a marginally lower error (closer to center)
 					r2 = reward;
 				}
 				else {
@@ -342,7 +337,7 @@ namespace Utility {
 				double difference = std::fabs(error_new_corrected - error_old_corrected);
 				double reward = difference / center;
 
-				if (error_old_corrected > error_new_corrected) {  // If move has resulted in be relatively closer to center
+				if (error_old_corrected > error_new_corrected) {  // If move has resulted in a marginally lower error (closer to center)
 					r2 = reward;
 				}
 				else {
@@ -352,68 +347,47 @@ namespace Utility {
 
 			return r1 + r2;
 
-		} else {
-			double absMax = max;
-			double errorThreshold = threshold;
-			bool done = d;
-			double errorNew = n;
-			double errorOld = o;
-
-			// Punish done state
-			if (done) {
-				return -3.0;
-			}
-
-			// puinish overshooting   
-			int signOld = errorOld >= 0 ? 1 : 0;
-			int signNew = errorNew >= 0 ? 1 : 0;
-
-			if (signOld - signNew != 0) {
-				return -1.0;
-			}
-			else {
-
-				// ABS Errors
-				errorOld = abs(errorOld);
-				errorNew = abs(errorNew);
-
-				// Scale errors from 0.0 to 1.0
-				double errorOldScaled = errorOld / static_cast<double>(absMax);
-				double errorNewScaled = errorNew / static_cast<double>(absMax);
-
-				// If within threshold
-				if (errorNewScaled <= errorThreshold) {
-					return 0.0;
-				}
-
-				// Score the errors 
-				double errorOldScore = mapOutput(1.0 - errorOldScaled, 0.0, 1.0, -1.0, 0.0);
-				double errorNewScore = mapOutput(1.0 - errorNewScaled, 0.0, 1.0, -1.0, 0.0);
-
-				if (errorNewScore >= errorOldScore) {
-					double percentBetter = 1.0 - abs(errorNewScore / errorOldScore);
-					double bias = ((pow(10.0, percentBetter) - 1) / (10.0 - 1.0)); // Exponential func from 0.0 to 1.0
-
-					return std::min(errorNewScore + bias, 0.0);
-				}
-				else {
-					double percentWorse = 1.0 - abs(errorOldScore / errorNewScore);
-					double bias = ((pow(10.0, percentWorse) - 1) / (10.0 - 1.0));
-
-					return errorNewScore - bias;
-				}
-			}
 		}
+
+		double r1 = 0.0;
+		double r2 = 0.0;
+
+		// scale from 0.0 to 1.0
+		double errorOldScaled = std::fabs(center - std::fabs(o)) / center;
+		double errorNewScaled = std::fabs(center - std::fabs(n)) / center;
+
+		if (done) {
+			r1 = -1.0;
+		}
+
+		// If within threshold
+		if (errorNewScaled <= errorThreshold) {
+			r1 += 0.0;
+		}
+		else {
+			r1 += errorThreshold - errorNewScaled;
+		}
+
+		if (errorNewScaled <= errorOldScaled) {
+			r2 = 0.0;
+		}
+		else {
+			r2 = errorOldScaled - errorNewScaled;
+		}
+
+		return r1 + r2;
 	}
 
+	// Scale from -1.0 to 1.0 to low to high
 	static double rescaleAction(double action, double min, double max) {
 
 		/*double scale_factor = (max - min) / 2.0;
 		double reloc_factor = max - scale_factor;
-		action = (action * scale_factor) + reloc_factor;
-		return std::clamp<double>(action, min, max);*/
+		action = (action * scale_factor) + reloc_factor; */
+		return (min + (0.5 * (action + 1.0) * (max - min)));
+		// return std::clamp<double>(action, min, max);
 		// return std::clamp<double>(action * ((max - min) / 2.0) + ((max + min) / 2.0), min, max);
-		return action;
+		// return action;
 	}
 
 	static int printDirectory(const char* path) {

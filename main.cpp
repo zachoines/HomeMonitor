@@ -135,7 +135,7 @@ int main(int argc, char** argv)
 	if (parameters->config->useArduino) {
 		fd = wiringPiI2CSetup(ARDUINO_ADDRESS);
 		if (fd == -1) {
-			throw "Failed to init I2C communication.";
+			throw std::runtime_error("Failed to init I2C communication.");
 		}
 	}
 	else {
@@ -143,7 +143,7 @@ int main(int argc, char** argv)
 		fd = pca9685Setup(PIN_BASE, 0x40, HERTZ);
 		if (fd < 0)
 		{
-			throw "Failed to init I2C communication.";
+			throw std::runtime_error("Failed to init I2C communication.");
 		}
 
 		pca9685PWMReset(fd);
@@ -151,14 +151,14 @@ int main(int argc, char** argv)
 
 	if (!camera.isOpened())
 	{
-		throw "cannot initialize camera";
+		throw std::runtime_error("cannot initialize camera");
 	}
 
 	cv::Mat test = GetImageFromCamera(camera);
 
 	if (test.empty())
 	{
-		throw "Issue reading frame!";
+		throw std::runtime_error("Issue reading frame!");
 	}
 
 	int height = test.rows;
@@ -216,24 +216,29 @@ void* panTiltThread(void* args) {
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
 	Env* servos = new Env(parameters, &dataLock, &dataCond);
+	
+	// Training options and record keeping
+	double episodeAverageRewards = 0.0;
+	double episodeAverageSteps = 0.0;
+	double numEpisodes = 0.0;
+	double episodeRewards = 0.0;
+	double episodeSteps = 0.0;
 
 	// training state variables
 	bool initialRandomActions = parameters->config->initialRandomActions;
 	int numInitialRandomActions = parameters->config->numInitialRandomActions;
-	bool trainMode = parameters->config->trainMode;
 	
-	double predictedActions[2][3] = {
-		0.0
-	};
+	double predictedActions[NUM_SERVOS][NUM_ACTIONS];
+	double stateArray[NUM_INPUT];
+	SD currentState[NUM_SERVOS];
+	TD trainData[NUM_SERVOS];
+	ED eventData[NUM_SERVOS];
+	RD resetResults;
 
-	SD currentState[2];
-	TD trainData[2];
-	ED eventData[2];
-
-	servos->resetEnv();
-
-	if (!servos->init()) {
-		throw "Could not initialize servos and pid's";
+	resetResults = servos->reset();	
+	
+	for (int servo = 0; servo < NUM_SERVOS; servo++) {
+		currentState[servo] = resetResults.servos[servo];
 	}
 
 	while (true) {
@@ -243,10 +248,8 @@ void* panTiltThread(void* args) {
 			if (!servos->isDone()) {
 				for (int i = 0; i < 2; i++) {
 
-					double stateArray[parameters->config->numInput];
-
 					// Query network and get PID gains
-					if (trainMode) {
+					if (parameters->config->trainMode) {
 						if (initialRandomActions && numInitialRandomActions >= 0) {
 
 							numInitialRandomActions--;
@@ -287,30 +290,70 @@ void* panTiltThread(void* args) {
 					
 				}
 
-				servos->step(predictedActions);
+				SR stepResults = servos->step(predictedActions);
 
-				if (trainMode) {
+				if (parameters->config->trainMode) {
 
-					if (servos->hasData()) {
-						servos->getResults(trainData);
-						// replayBuffer->add(trainData[0]);
+					int size = replayBuffer->size();
+					
+					for (int servo = 0; servo < NUM_SERVOS; servo++) {
+						trainData[servo] = stepResults.servos[servo];
+						trainData[servo].currentState = currentState[servo];
+						currentState[servo] = trainData[servo].nextState;
+						
+					}
+
+					if (replayBuffer->size() <= parameters->config->maxBufferSize) {
+
+						// replayBuffer->add(trainData[servo]);
 						replayBuffer->add(trainData[1]);
 
-						if (!parameters->freshData) {
-							pthread_mutex_lock(&trainLock);
+						if (!trainData[1].done) {
+							episodeSteps += 1.0;
+							episodeRewards += trainData[1].reward;
+						}
+						else {
+							numEpisodes += 1.0;
+								
 
-							if (replayBuffer->size() >= parameters->config->minBufferSize) {
-								parameters->freshData = true;
-								pthread_cond_broadcast(&trainCond);
-							}
+							// EMA of steps and rewards (With 30% weight to new episodes; or 5 episode averaging)
+							double percentage = (1.0/3.0);
+							double timePeriods = (2.0 / percentage) - 1.0;
+							double emaWeight = (2.0 / (timePeriods + 1.0));
 
-							pthread_mutex_unlock(&trainLock);
+							episodeAverageRewards = (episodeRewards - episodeAverageRewards) * emaWeight + episodeAverageRewards;
+							episodeAverageSteps = (episodeSteps - episodeAverageSteps) * emaWeight + episodeAverageSteps;
+
+							std::cout << "Episode: " << numEpisodes << std::endl;
+							std::cout << "Rewards were: " << episodeRewards << std::endl;
+							std::cout << "Total steps were: " << episodeSteps << std::endl;
+							std::cout << "EMA rewards: " << episodeAverageRewards << std::endl;
+							std::cout << "EMA steps: " << episodeAverageSteps << std::endl;
+
+							episodeSteps = 0.0;
+							episodeRewards = 0.0;
 						}
 					}
+
+					if (!parameters->freshData) {
+						pthread_mutex_lock(&trainLock);
+
+							
+						if (size > parameters->config->minBufferSize + 1) {
+							parameters->freshData = true;
+							pthread_cond_broadcast(&trainCond);
+						} 
+
+						pthread_mutex_unlock(&trainLock);
+					}
+	
 				}
 			}
 			else {
-				servos->ping();
+				resetResults = servos->reset();
+				for (int servo = 0; servo < NUM_SERVOS; servo++) {
+					currentState[servo] = resetResults.servos[servo];
+				}		
 			}
 		}
 		else {
@@ -324,7 +367,7 @@ void* panTiltThread(void* args) {
 				servos->step(predictedActions);
 			}
 			else {
-				servos->ping();
+				resetResults = servos->reset();
 			}	
 		}
 	}
@@ -387,7 +430,7 @@ void* detectThread(void* args)
 
 	if (!camera.isOpened())
 	{
-		throw "cannot initialize camera";
+		throw std::runtime_error("cannot initialize camera");
 	}
 
 	std::string prototextFile = "/MobileNetSSD_deploy.prototxt";
@@ -401,11 +444,11 @@ void* detectThread(void* args)
 		if (fileExists(modelFilePath) && fileExists(prototextFilePath)) {
 			net = dnn::readNetFromCaffe(prototextFilePath, modelFilePath);
 			if (net.empty()) {
-				throw "Error initializing caffe model";
+				throw std::runtime_error("Error initializing caffe model");
 			}
 		}
 		else {
-			throw "Error finding model and prototext files";
+			throw std::runtime_error("Error finding model and prototext files");
 		}
 	}
 
@@ -634,8 +677,8 @@ void* detectThread(void* args)
 						tilt.point = 0;
 						pan.size = 0;
 						tilt.size = 0;
-						pan.Obj = objX;
-						tilt.Obj = objY;
+						pan.Obj = frameCenterX * 2;
+						tilt.Obj = frameCenterY * 2; // max error
 						pan.Frame = frameCenterX;
 						tilt.Frame = frameCenterY;
 						pan.done = true;
@@ -669,8 +712,7 @@ void* detectThread(void* args)
 		}
 		catch (const std::exception&)
 		{
-			std::cout << "Issue detecting target from video" << std::endl;
-			exit(-1);
+			throw std::runtime_error("Issue detecting target from video");
 		}
 	}
 
@@ -681,10 +723,32 @@ void* autoTuneThread(void* args)
 {
 	param* parameters = (param*)args;
 	int batchSize = parameters->config->batchSize;
+	long maxTrainingSteps = parameters->config->maxTrainingSteps;
+	long currentSteps = 0;
+	int minBufferSize = parameters->config->minBufferSize;
+	int maxBufferSize = parameters->config->maxBufferSize;
 	int sessions = parameters->config->maxTrainingSessions;
+	int numUpdates = parameters->config->numUpdates;
 	bool offPolicy = parameters->config->offPolicyTrain;
 	double rate = parameters->config->trainRate;
 
+	// Annealed ERE (Emphasizing Recent Experience)
+	// https://arxiv.org/pdf/1906.04009.pdf
+	double N0 = 0.996;
+	double NT = 1.0;
+	double T = maxTrainingSteps;
+	double t_i = 0;
+	
+start:
+
+	parameters->freshData = false;
+	replayBuffer->clear();
+	
+	if (sessions <= 0) {
+		parameters->config->trainMode = false; // start running in eval mode
+		std::cout << "Training session over!!" << std::endl;
+	}
+	
 	// Wait for the buffer to fill
 	pthread_mutex_lock(&trainLock);
 	while (!parameters->freshData) {
@@ -694,9 +758,27 @@ void* autoTuneThread(void* args)
 
 	while (true) {
 
+		double N = static_cast<double>(replayBuffer->size());
+		t_i += 1;
+		double n_i = N0 + (NT - N0) * (t_i / T);
+		int cmin = N - ( minBufferSize );
+		
 		if (offPolicy) {
-			for (int i = 0; i < sessions; i += 1) {
-				TrainBuffer batch = replayBuffer->sample(batchSize, false);
+			if (currentSteps >= maxTrainingSteps) {
+				currentSteps = 0;
+				sessions--;
+				goto start;
+			}
+			else {
+				currentSteps += 1;
+			}
+
+			for (int k = 0; k < numUpdates; k += 1) {
+				int startingRange = std::min<int>( N - N * std::pow(n_i, static_cast<double>(k) * (1000.0 / numUpdates)), cmin);
+
+				TrainBuffer batch = replayBuffer->ere_sample(batchSize, startingRange);
+				// TrainBuffer batch = replayBuffer->sample(batchSize, false);
+				// TrainBuffer batch = replayBuffer->sample_transition(batchSize);
 				pidAutoTuner->update(batch.size(), &batch);
 			}
 

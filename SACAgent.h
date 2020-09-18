@@ -24,11 +24,11 @@ private:
 	QNetwork* _q_net1; 
 	QNetwork* _q_net2;
 
-	QNetwork* _target_q_network_1;
-	QNetwork* _target_q_network_2;
+	/*QNetwork* _target_q_network_1;
+	QNetwork* _target_q_network_2;*/
 
-	/*ValueNetwork* _target_value_network_1;
-	ValueNetwork* _target_value_network_2;*/
+	ValueNetwork* _target_value_network;
+	ValueNetwork* _value_network;
 
 	PolicyNetwork* _policy_net;
 
@@ -40,7 +40,7 @@ private:
 	void _transfer_params_v2(torch::nn::Module& from, torch::nn::Module& to, bool param_smoothing = false);
 
 public:
-	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max = 1.0, double action_min = 0.0, bool alphaAdjuster = true, double gamma = 0.99, double tau = 5e-3, double alpha = 0.05, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
+	SACAgent(int num_inputs, int num_hidden, int num_actions, double action_max, double action_min, bool alphaAdjuster = true, double gamma = 0.99, double tau = 5e-3, double alpha = 0.2, double q_lr = 3e-4, double policy_lr = 3e-4, double a_lr = 3e-4);
 	~SACAgent();
 
 	void update(int batchSize, TrainBuffer* replayBuffer);

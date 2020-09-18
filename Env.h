@@ -1,5 +1,6 @@
 #pragma once
 #include "data.h"
+#include "PID.h"
 class Env
 {
 private:
@@ -9,52 +10,32 @@ private:
 	param* _params;
 	cfg* _config;
 
-	SD _currentState[2];
-	SD _lastState[2];
-	ED _lastData[2];
-	ED _currentData[2];
-	
-	double _lastReward[2]{
-		0.0
-	};
+	double _lastTimeStamp[NUM_SERVOS];
 
-	double _stateData[2][7][2] = {
-		0.0
-	};
+	ED _lastData[NUM_SERVOS];
+	ED _currentData[NUM_SERVOS];
+	SD _observation[NUM_SERVOS];
 
-	double _lastTimeStamp[2]{
-		0.0
-	};
-
-	double _lastActions[2][3] = {
-		0.0
-	}; 
-
-	bool _hasData;
-	bool _invert[2];
-	bool _disableServo[2];
-	double _resetAngles[2];
-	double _currentAngles[2];
-	double _lastAngles[2];
+	bool _invert[NUM_SERVOS];
+	bool _disableServo[NUM_SERVOS];
+	double _resetAngles[NUM_SERVOS];
+	double _currentAngles[NUM_SERVOS];
+	double _lastAngles[NUM_SERVOS];
 
 	PID* _pan = nullptr;
 	PID* _tilt = nullptr;
-	PID* _pids[2];
+	PID* _pids[NUM_SERVOS];
 
-	int _errorCounter;
-
-	void _updateState();
 	void _sleep();
 	void _syncEnv();
-	void _resetData();
+	void _resetEnv(); // Resets servos and re-inits PID's. Call only once manually.
+
 public:
 	Env(param* parameters, pthread_mutex_t* stateDataLoc, pthread_cond_t* stateDataCond);
-	void resetEnv(); // Resets servos and re-inits PID's. Call only once manually.
-	bool init(); // Call once at beginning of program. Resets internal state, returns current env state. 
-	void ping(); // Sync with dection results
-	void step(double actions[2][3]);  // Steps with actions and waits for Env to update, then returns the current state.
-	void getResults(TD trainData[2]); // Call after stepping for temporal transition results from env. 
+
 	bool isDone();
-	bool hasData();
+
+	RD reset();  // Steps with actions and waits for Env to update, then returns the current state.
+	SR step(double actions[NUM_SERVOS][NUM_ACTIONS]);  // Steps with actions and waits for Env to update, then returns the current state.
 };
 

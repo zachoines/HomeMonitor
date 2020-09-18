@@ -1,5 +1,23 @@
 #pragma once
 #include <chrono>
+struct PIDState {
+	double e; // error
+	double i; // Integral of error with respect to time
+	double d; // Derivative of error with respect to time
+	double din; // Delta input
+	double dt; // Delta time
+	double de; // Delta error
+
+	void getStateArray(double state[5]) {
+		state[0] = i;
+		state[1] = d;
+		state[2] = e;
+		state[3] = din;
+	}
+
+
+} typedef state;
+
 class PID
 {
 	public:
@@ -11,6 +29,11 @@ class PID
 		void getPID(double w[3]);
 		void setWindupGaurd(double guard);
 		double getWindupGaurd();
+		state mockUpdate(double input, double sleep = 0.0, bool normalize = true); // Non-binding "what if" update call, returning copies of internal pid variables
+		
+		// Normalize: Scale from ~ -1 to ~ 1 
+		// Get current internal variable state. Call after update().
+		state getState(bool normalize = true); 
 
 	private:
 		double _max;
@@ -34,9 +57,13 @@ class PID
 
 		double _prevError;
 		double _integral;
+		double _deltaInput;
+		double _deltaTime;
+		double _deltaError;
 
 		double _windup_guard;
 		double _setpoint;
 		double _last_input;
+
 };
 

@@ -14,5 +14,6 @@ public:
 	torch::Tensor sample();
 	torch::Tensor rsample();
 	torch::Tensor log_prob(torch::Tensor value);
+	torch::Tensor log_prob(torch::Tensor z, torch::Tensor log_std, torch::Tensor mean); // OpenAI way
 };
 

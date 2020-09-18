@@ -1,4 +1,5 @@
 #include "ReplayBuffer.h"
+#include "util.h"
 #include <vector>
 #include <random>
 #include <iterator>
@@ -13,8 +14,6 @@ ReplayBuffer::ReplayBuffer(int maxBufferSize)
 	_trainingBuffer = new TrainBuffer();
 	_trainBufferLock = PTHREAD_MUTEX_INITIALIZER;
 	_maxBufferSize = maxBufferSize;
-
-	
 }
 
 int ReplayBuffer::_draw(int min, int max)
@@ -27,7 +26,7 @@ TrainBuffer ReplayBuffer::sample(int batchSize, bool remove)
 	TrainBuffer batch;
 
 	if (batchSize > _trainingBuffer->size()) {
-		throw "Batchsize cannot be larger than buffer size";
+		throw std::runtime_error("Batch size cannot be larger than buffer size");
 	}
 
 	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
@@ -48,6 +47,48 @@ TrainBuffer ReplayBuffer::sample(int batchSize, bool remove)
 	return batch;
 }
 
+TrainBuffer ReplayBuffer::ere_sample(int batchSize, int startingIndex)
+{
+	TrainBuffer batch;
+
+	if (batchSize > _trainingBuffer->size()) {
+		throw std::runtime_error("Batch size cannot be larger than buffer size");
+	}
+
+	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
+
+		for (int i = 0; i < batchSize; i++) {
+			int number = _draw(startingIndex, _trainingBuffer->size() - 1);
+
+			batch.push_back(_trainingBuffer->at(number));
+		}
+	}
+
+	pthread_mutex_unlock(&_trainBufferLock);
+	return batch;
+}
+
+TrainBuffer ReplayBuffer::sample_transition(int batchSize)
+{
+	if (batchSize > _trainingBuffer->size()) {
+		throw std::runtime_error("Batch size cannot be larger than buffer size");
+	}
+
+	TrainBuffer batch;
+	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
+
+		int start = _draw(0, _trainingBuffer->size() - batchSize - 1); 
+		int end = start + batchSize - 1;
+
+		batch = Utility::slice(*_trainingBuffer, start, end);
+		
+	}
+
+	pthread_mutex_unlock(&_trainBufferLock);
+	return batch;
+
+}
+
 TrainBuffer ReplayBuffer::getCopy() {
 
 	TrainBuffer buff;
@@ -62,10 +103,12 @@ TrainBuffer ReplayBuffer::getCopy() {
 
 void ReplayBuffer::add(TD data)
 {
-	_bufferIndex = (_bufferIndex + 1) % _maxBufferSize;
+	// _bufferIndex = (_bufferIndex + 1) % _maxBufferSize;
+	// _trainingBuffer->at(_bufferIndex) = data;
 	if (pthread_mutex_lock(&_trainBufferLock) == 0) {
 		if (_trainingBuffer->size() == _maxBufferSize) {
-			_trainingBuffer->at(_bufferIndex) = data;
+			_trainingBuffer->erase(_trainingBuffer->begin());	
+			_trainingBuffer->push_back(data);
 		}
 		else {
 			_trainingBuffer->push_back(data);

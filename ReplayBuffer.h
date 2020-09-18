@@ -23,6 +23,8 @@ private:
 public:
 	ReplayBuffer(int maxBufferSize = 1024);
 	TrainBuffer sample(int batchSize = 32, bool remove = true);
+	TrainBuffer ere_sample(int batchSize = 32, int startingIndex = 0);
+	TrainBuffer sample_transition(int batchSize = 32);
 	TrainBuffer getCopy();
 	void add(TD data);
 	int size();
