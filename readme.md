@@ -3,13 +3,13 @@
 	* To develope an AI powered target acquisition and tracking system for use on mobile and IOT based camera systems.
 
 * Technologies
-	* Target acquisition performed by openCV C++ API. 
-		* More advance features pinned for future utilizing Pytorch.
-	* Target Tracking with PID's 
+	* Target acquisition performed by OpenCV 4 C++ API. Currently face detection supported.
+		* More advance features pinned for future utilizing Pytorch C++ API.
+	* Target tracking with PID's and servo control
 	* Advance PID autotuning via Soft Actor Critic Reinforcement learning
 
 * Install
-	* Opencv4 c++
+	* OpenCV 4 c++
 		 * [Here](https://cv-tricks.com/installation/opencv-4-1-ubuntu18-04/) is an excellent walkthrough of the process.
 
 	* Pytorch c++
@@ -33,9 +33,8 @@
 			* ./test
 
 	* lib Boost
-		* sudo apt-get install libboost
-		* include dir as /usr/include/boost
-		* import libs: 
+		* Sudo apt-get install libboost
+		* Include dir via linker command: -I/usr/include/boost
 
 	* Servo controller lib for RBPI4
 		* I use this [PCA965](https://github.com/Reinbert/pca9685) lib
