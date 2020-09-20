@@ -230,7 +230,7 @@ namespace Utility {
 	}
 
 	/* 
-
+		When alt 'true':
 		Reward bounds are -2.0 to +1.5:
 
 		+.5 bonus for within 2% error
@@ -238,6 +238,12 @@ namespace Utility {
 
 		-1.0 punishment for done state
 		0.0 to -1.0 punishment for marginally worse transitions
+	
+		
+		Else reward ranges from -2.0 to 0.0. 
+		-1.0 for done state
+		0.0 to -1.0 depending on current error ('threshold' - 'error new' scaled)
+		0.0 to -1.0 for marginally worse transitions
 
 	*/
 

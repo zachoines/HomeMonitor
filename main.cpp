@@ -300,39 +300,36 @@ void* panTiltThread(void* args) {
 						trainData[servo] = stepResults.servos[servo];
 						trainData[servo].currentState = currentState[servo];
 						currentState[servo] = trainData[servo].nextState;
-						
+
+						if (replayBuffer->size() <= parameters->config->maxBufferSize) {
+							replayBuffer->add(trainData[servo]);
+						}
 					}
 
-					if (replayBuffer->size() <= parameters->config->maxBufferSize) {
+					if (!trainData[1].done) {
+						episodeSteps += 1.0;
+						episodeRewards += trainData[1].reward;
+					}
+					else {
+						numEpisodes += 1.0;
 
-						// replayBuffer->add(trainData[servo]);
-						replayBuffer->add(trainData[1]);
 
-						if (!trainData[1].done) {
-							episodeSteps += 1.0;
-							episodeRewards += trainData[1].reward;
-						}
-						else {
-							numEpisodes += 1.0;
-								
+						// EMA of steps and rewards (With 30% weight to new episodes; or 5 episode averaging)
+						double percentage = (1.0 / 3.0);
+						double timePeriods = (2.0 / percentage) - 1.0;
+						double emaWeight = (2.0 / (timePeriods + 1.0));
 
-							// EMA of steps and rewards (With 30% weight to new episodes; or 5 episode averaging)
-							double percentage = (1.0/3.0);
-							double timePeriods = (2.0 / percentage) - 1.0;
-							double emaWeight = (2.0 / (timePeriods + 1.0));
+						episodeAverageRewards = (episodeRewards - episodeAverageRewards) * emaWeight + episodeAverageRewards;
+						episodeAverageSteps = (episodeSteps - episodeAverageSteps) * emaWeight + episodeAverageSteps;
 
-							episodeAverageRewards = (episodeRewards - episodeAverageRewards) * emaWeight + episodeAverageRewards;
-							episodeAverageSteps = (episodeSteps - episodeAverageSteps) * emaWeight + episodeAverageSteps;
+						std::cout << "Episode: " << numEpisodes << std::endl;
+						std::cout << "Rewards were: " << episodeRewards << std::endl;
+						std::cout << "Total steps were: " << episodeSteps << std::endl;
+						std::cout << "EMA rewards: " << episodeAverageRewards << std::endl;
+						std::cout << "EMA steps: " << episodeAverageSteps << std::endl;
 
-							std::cout << "Episode: " << numEpisodes << std::endl;
-							std::cout << "Rewards were: " << episodeRewards << std::endl;
-							std::cout << "Total steps were: " << episodeSteps << std::endl;
-							std::cout << "EMA rewards: " << episodeAverageRewards << std::endl;
-							std::cout << "EMA steps: " << episodeAverageSteps << std::endl;
-
-							episodeSteps = 0.0;
-							episodeRewards = 0.0;
-						}
+						episodeSteps = 0.0;
+						episodeRewards = 0.0;
 					}
 
 					if (!parameters->freshData) {
@@ -364,7 +361,7 @@ void* panTiltThread(void* args) {
 					predictedActions[i][2] = parameters->config->defaultGains[2];
 				}
 
-				servos->step(predictedActions);
+				servos->step(predictedActions, false);
 			}
 			else {
 				resetResults = servos->reset();
@@ -767,6 +764,7 @@ start:
 			if (currentSteps >= maxTrainingSteps) {
 				currentSteps = 0;
 				sessions--;
+				t_i = 0;
 				goto start;
 			}
 			else {

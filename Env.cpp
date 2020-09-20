@@ -112,7 +112,7 @@ RD Env::reset()
 
 // Using action, take step and return observation, reward, done, and actions for every servo. 
 // Note: SR[servo].currentState is always null. Retrieve currentState from previous 'step' or 'reset' call.
-SR Env::step(double actions[NUM_SERVOS][NUM_ACTIONS])
+SR Env::step(double actions[NUM_SERVOS][NUM_ACTIONS], bool rescale)
 {
 	SR stepResults;
 
@@ -127,11 +127,14 @@ SR Env::step(double actions[NUM_SERVOS][NUM_ACTIONS])
 		// Scale PID actions if configured
 		for (int a = 0; a < NUM_ACTIONS; a++) {
 			stepResults.servos[servo].actions[a] = actions[servo][a];
-			actions[servo][a] = Utility::rescaleAction(actions[servo][a], _params->config->actionLow, _params->config->actionHigh);
+
+			if (rescale) {
+				actions[servo][a] = Utility::rescaleAction(actions[servo][a], _params->config->actionLow, _params->config->actionHigh);
+			}
 		}
 
 		// Print out the PID gains
-		if (0.01 >= randChance) {
+		if (0.05 >= randChance) {
 			std::cout << "Here is the new actions(s): ";
 			for (int a = 0; a < _params->config->numActions; a++) {
 				std::cout << actions[servo][a] << ", ";

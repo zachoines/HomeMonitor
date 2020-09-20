@@ -145,10 +145,10 @@ struct Config {
 
 		recheckChance(0.2),                  // Chance to revalidate tracking quality
 		lossCountMax(5),                     // Max number of rechecks before episode is considered over
-		updateRate(5),                       // Servo updates, commands per second
-		trainRate(0.5),					     // Network updates, sessions per second
+		updateRate(10),                      // Servo updates, commands per second
+		trainRate(1.0),					     // Network updates, sessions per second
 		invertX(false),                      // Flip output angles for pan
-		invertY(true),						 // Flip output angles for tilt
+		invertY(false),						 // Flip output angles for tilt
 		disableX(false),                     // Disable the pan servo
 		disableY(true),                      // Disable the tilt servo
 
@@ -164,7 +164,7 @@ struct Config {
 		showVideo(false),					 // Show camera feed
 		cascadeDetector(true),				 // Use faster cascade face detector 
 		target("face"),						 // TODO: remove this option
-		actionHigh(0.07),                     // Max output to of policy network's logits
+		actionHigh(0.07),                    // Max output to of policy network's logits
 		actionLow(0.0),                      // Min output to of policy network's logits        
 		pidOutputHigh(70.0),                 // Max output allowed for PID's
 		pidOutputLow(-70.0),				 // Min output allowed for PID's
@@ -174,7 +174,7 @@ struct Config {
 		angleHigh(70.0),                     // Max allowable output angle to servos
 		angleLow(-70.0),                     // Min allowable output angle to servos
 		resetAngleX(-1.0),                   // Angle when reset
-		resetAngleY(-5.0),                   // Angle when reset
+		resetAngleY(5.0),                    // Angle when reset
 		offPolicyTrain(true)                 // Use uniform random sampling from replay buffer without removal
 		{}
 } typedef cfg;

@@ -248,8 +248,10 @@ torch::Tensor SACAgent::get_action(torch::Tensor state, bool trainMode)
 			next = _policy_net->sample(state, 1);
 			pthread_mutex_unlock(&_policyNetLock);
 		}
-
-		pthread_mutex_unlock(&_policyNetLock);
+		else {
+			pthread_mutex_unlock(&_policyNetLock);
+			throw std::runtime_error("could not obtain lock when getting action");
+		}
 
 		torch::Tensor reshapedResult = next.view({ 5, 1, _num_actions });
 		return torch::squeeze(reshapedResult[0]);
@@ -259,8 +261,10 @@ torch::Tensor SACAgent::get_action(torch::Tensor state, bool trainMode)
 			next = _policy_net->sample(state, 1, true); // Run in eval mode
 			pthread_mutex_unlock(&_policyNetLock);
 		}
-
-		pthread_mutex_unlock(&_policyNetLock);
+		else {
+			pthread_mutex_unlock(&_policyNetLock);
+			throw std::runtime_error("could not obtain lock when getting action");
+		}
 
 		torch::Tensor reshapedResult = next.view({ 5, 1, _num_actions });
 		return torch::squeeze(reshapedResult[2]); // Return the mean action
@@ -335,15 +339,6 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	torch::Tensor q_value_loss1 = 0.5 * torch::mean(torch::pow(q_prediction_1 - target_q_values.detach(), 2.0));
 	torch::Tensor q_value_loss2 = 0.5 * torch::mean(torch::pow(q_prediction_2 - target_q_values.detach(), 2.0));
 
-	double randChance = static_cast<float>(rand()) / static_cast <float> (RAND_MAX);
-
-	if (0.01 >= randChance) {
-		std::cout << "Here are the states: " << states_t << std::endl;
-		std::cout << "Here are the log pi: " << log_pi_t << std::endl;
-		std::cout << "Here is q pred: " << q_prediction_1 << std::endl;
-		std::cout << "Here target q value predictions: " << target_q_values << std::endl;
-	}
-
 	// Training Value Function
 	torch::Tensor qf1_pi = _q_net1->forward(states_t, new_actions_t, batchSize);
 	torch::Tensor qf2_pi = _q_net2->forward(states_t, new_actions_t, batchSize);
@@ -354,12 +349,12 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 
 	
 	// Train Policy Network with Regularization
-	torch::Tensor policy_loss = (_alpha * log_pi_t - qf1_pi).mean();
-	/*torch::Tensor mean_reg = 1e-3 * 0.5 * torch::mean(mean.pow(2).sum(1, true));
+	torch::Tensor policy_loss = (_alpha * log_pi_t - torch::min(qf1_pi, qf2_pi)).mean();
+	torch::Tensor mean_reg = 1e-3 * 0.5 * torch::mean(mean.pow(2).sum(1, true));
 	torch::Tensor log_std_reg = 1e-3 * 0.5 * torch::mean(torch::log(std).pow(2).sum(1, true));
 
 	torch::Tensor actor_reg = mean_reg + log_std_reg;
-	policy_loss += actor_reg;*/
+	policy_loss += actor_reg;
 
 	// Update Policy Network
 	if (pthread_mutex_lock(&_policyNetLock) == 0) {
@@ -416,7 +411,7 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	std::cout << "Q Loss 2: " << q_value_loss2 << std::endl;
 }
 
-// Simplified update function with 4QNetworks and no regularization
+// Simplified update function with 4 QNetworks and no regularization
 /* void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 {
 	double states[batchSize][_num_inputs];

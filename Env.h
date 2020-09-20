@@ -36,6 +36,6 @@ public:
 	bool isDone();
 
 	RD reset();  // Steps with actions and waits for Env to update, then returns the current state.
-	SR step(double actions[NUM_SERVOS][NUM_ACTIONS]);  // Steps with actions and waits for Env to update, then returns the current state.
+	SR step(double actions[NUM_SERVOS][NUM_ACTIONS], bool rescale = true);  // Steps with actions and waits for Env to update, then returns the current state.
 };
 
