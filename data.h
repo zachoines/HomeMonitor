@@ -99,6 +99,7 @@ struct Config {
 	bool draw;
 	bool showVideo;
 	bool cascadeDetector;
+	bool usePIDs;
 	int lossCountMax;
 	std::string target;
 
@@ -117,7 +118,7 @@ struct Config {
 	bool disableX;
 	bool disableY;
 	bool useArduino;
-	unsigned char arduinoCommands[3]; 
+	unsigned char arduinoCommands[3];
 
 	// bounds
 	double actionHigh;
@@ -135,7 +136,7 @@ struct Config {
 		maxTrainingSessions(1),              // TODO: Remove this option
 		numUpdates(5),                       // Num updates per training session.
 
-		batchSize(256),                      // Network batch size.
+		batchSize(128),                      // Network batch size.
 		initialRandomActions(true),          // Enable random actions.
 		numInitialRandomActions(20000),      // Number of random actions taken.
 		trainMode(true),                     // When autotuning is on, 'false' means network test mode.
@@ -143,9 +144,9 @@ struct Config {
 		frameSkip(false),                    // TODO: Remove this option
 		numFrameSkip(4),                     // TODO: Remove this option
 
-		recheckChance(0.2),                  // Chance to revalidate tracking quality
-		lossCountMax(5),                     // Max number of rechecks before episode is considered over
-		updateRate(10),                      // Servo updates, commands per second
+		recheckChance(0.1),                  // Chance to revalidate tracking quality
+		lossCountMax(2),                     // Max number of rechecks before episode is considered over
+		updateRate(5),                       // Servo updates, commands per second
 		trainRate(1.0),					     // Network updates, sessions per second
 		invertX(false),                      // Flip output angles for pan
 		invertY(false),						 // Flip output angles for tilt
@@ -163,18 +164,17 @@ struct Config {
 		draw(false),						 // Draw target bounding box and center on frame
 		showVideo(false),					 // Show camera feed
 		cascadeDetector(true),				 // Use faster cascade face detector 
+		usePIDs(true),                       // Network outputs PID gains, or network outputs angle directly
 		target("face"),						 // TODO: remove this option
-		actionHigh(0.07),                    // Max output to of policy network's logits
+		actionHigh(0.1),                     // Max output to of policy network's logits
 		actionLow(0.0),                      // Min output to of policy network's logits        
 		pidOutputHigh(70.0),                 // Max output allowed for PID's
 		pidOutputLow(-70.0),				 // Min output allowed for PID's
-		// defaultGains({0.11, 0.09, 0.002}),
 		defaultGains({ 0.05, 0.04, 0.001 }), // Gains fed to pids when initialized
-		// defaultGains({ 1.0, 1.0, 1.0 }), 
 		angleHigh(70.0),                     // Max allowable output angle to servos
 		angleLow(-70.0),                     // Min allowable output angle to servos
-		resetAngleX(-1.0),                   // Angle when reset
-		resetAngleY(5.0),                    // Angle when reset
+		resetAngleX(0.0),                    // Angle when reset
+		resetAngleY(0.0),                    // Angle when reset
 		offPolicyTrain(true)                 // Use uniform random sampling from replay buffer without removal
 		{}
 } typedef cfg;

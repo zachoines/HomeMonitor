@@ -126,6 +126,13 @@
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="plot.py">
+      <RemoteCopyFile Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyFile>
+      <RemoteCopyToOutputDir Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">true</RemoteCopyToOutputDir>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">false</ExcludedFromBuild>
+    </Text>
+  </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
       <CppLanguageStandard>c++17</CppLanguageStandard>

@@ -13,10 +13,14 @@ private:
 	double _action_max, _action_min, _action_scale, _action_bias;
 	int _current_update = 0;
 	int _current_save_delay = 0;
-	int _max_save_delay = 10;
+	int _max_save_delay = 100;
 	int _max_delay = 2;
+	unsigned long _total_update = 0;
 
 	bool _self_adjusting_alpha;
+
+	// log stats to file
+	std::string _lossFileName, _lossPath;
 	
 	// For internal syncing of access
 	pthread_mutex_t _policyNetLock = PTHREAD_MUTEX_INITIALIZER;
@@ -29,7 +33,6 @@ private:
 
 	ValueNetwork* _target_value_network;
 	ValueNetwork* _value_network;
-
 	PolicyNetwork* _policy_net;
 
 	torch::Tensor _log_alpha, _alpha;

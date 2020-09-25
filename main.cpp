@@ -4,6 +4,7 @@
 #include <vector>
 #include <filesystem>
 #include <random>
+#include <fstream>
 
 // C libs
 #include <ctime>
@@ -87,6 +88,11 @@ ReplayBuffer* replayBuffer = nullptr;
 cv::VideoCapture camera(0);
 torch::Device device(torch::kCPU);
 
+// Log files
+std::string statFileName = "/stat/episodeAverages.txt";
+std::string lossFileName = "/stat/trainingLoss.txt";
+std::string stateDir = "/stat";
+
 
 Ptr<Tracker> createOpenCVTracker(int type) {
 	Ptr<Tracker> tracker;
@@ -124,6 +130,20 @@ int main(int argc, char** argv)
 	}
 	else {
 		std::cout << "CUDA is not available! Training on CPU." << std::endl;
+	}
+
+	std::string avePath = get_current_dir_name() + statFileName;
+	std::string lossPath = get_current_dir_name() + lossFileName;
+	std::string statPath = get_current_dir_name() + stateDir;
+
+	mkdir(statPath.c_str(), 0755);
+
+	if (fileExists(avePath)) {
+		std::remove(avePath.c_str());
+	}
+
+	if (fileExists(lossPath)) {
+		std::remove(lossPath.c_str());
 	}
 
 	// Setup I2C comms and devices
@@ -216,11 +236,11 @@ void* panTiltThread(void* args) {
 	auto options = torch::TensorOptions().dtype(torch::kDouble).device(device);
 	param* parameters = (param*)args;
 	Env* servos = new Env(parameters, &dataLock, &dataCond);
-	
+
 	// Training options and record keeping
 	double episodeAverageRewards = 0.0;
 	double episodeAverageSteps = 0.0;
-	double numEpisodes = 0.0;
+	int numEpisodes = 0;
 	double episodeRewards = 0.0;
 	double episodeSteps = 0.0;
 
@@ -311,7 +331,7 @@ void* panTiltThread(void* args) {
 						episodeRewards += trainData[1].reward;
 					}
 					else {
-						numEpisodes += 1.0;
+						numEpisodes += 1;
 
 
 						// EMA of steps and rewards (With 30% weight to new episodes; or 5 episode averaging)
@@ -322,11 +342,16 @@ void* panTiltThread(void* args) {
 						episodeAverageRewards = (episodeRewards - episodeAverageRewards) * emaWeight + episodeAverageRewards;
 						episodeAverageSteps = (episodeSteps - episodeAverageSteps) * emaWeight + episodeAverageSteps;
 
-						std::cout << "Episode: " << numEpisodes << std::endl;
-						std::cout << "Rewards were: " << episodeRewards << std::endl;
-						std::cout << "Total steps were: " << episodeSteps << std::endl;
-						std::cout << "EMA rewards: " << episodeAverageRewards << std::endl;
-						std::cout << "EMA steps: " << episodeAverageSteps << std::endl;
+						// Log Episode averages
+						std::string avePath = get_current_dir_name() + statFileName;
+						std::string episodeData = std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>
+												 (std::chrono::system_clock::now().time_since_epoch()).count()) + ','
+												+ to_string(numEpisodes) + ','
+												+ to_string(episodeRewards) + ','
+												+ to_string(episodeSteps) + ','
+												+ to_string(episodeAverageRewards) + ','
+												+ to_string(episodeAverageSteps);
+						Utility::appendLineToFile(avePath, episodeData);
 
 						episodeSteps = 0.0;
 						episodeRewards = 0.0;

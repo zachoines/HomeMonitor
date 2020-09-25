@@ -25,6 +25,7 @@
 #include <cmath>
 #include <chrono>
 #include <thread>
+#include <string>
 
 // 3rd party libs
 #include <wiringPiI2C.h>
@@ -33,6 +34,27 @@
 #include "opencv2/opencv.hpp"
 
 namespace Utility {
+
+	static void appendLineToFile(std::string filepath, std::string line)
+	{
+		std::ofstream file; 
+		file.open(filepath, std::ios::out | std::ios::app);
+		if (file.fail())
+			throw std::ios_base::failure(std::strerror(errno));
+
+		file.exceptions(file.exceptions() | std::ios::failbit | std::ifstream::badbit);
+
+		file << line << std::endl;
+		file.close();
+	}
+
+	static bool folder_exists(std::string foldername)
+	{
+		struct stat st;
+		stat(foldername.c_str(), &st);
+		return st.st_mode & S_IFDIR;
+	}
+
 	static void msleep(long msec)
 	{
 		
@@ -275,79 +297,81 @@ namespace Utility {
 			} else if (errorNewScaled <= errorThreshold) {
 				r1 += 0.5;
 			}
-			else {
-				// r1 -= (errorNewScaled - errorThreshold);
-			}
 
-			// The target in ref to the center of frame. Left is F, right is T.
-			if (targetCenterNew < center) { // target is left of frame center
-				direction_new = false;
-			}
-			else { // target is right of frame center
-				direction_new = true;
-			}
+			if (targetCenterNew == targetCenterOld) {
+				r2 = 0.0;
+			} else {
 
-			if (targetCenterOld < center) { // target is left of frame center
-				direction_old = false;
-			}
-			else { // target is right of frame center
-				direction_old = true;
-			}
-
-			//  Both to the right of frame center, situation #1;
-			if (direction_old && direction_new) {
-
-				double reward = std::fabs(errorNewScaled - errorOldScaled);
-
-				if (targetCenterNew > targetCenterOld) { // frame center has moved furthure to object's left
-					r2 = -reward;
+				// The target in ref to the center of frame. Left is F, right is T.
+				if (targetCenterNew < center) { // target is left of frame center
+					direction_new = false;
 				}
-				else { // frame center has moved closer to object's left
-					r2 = reward;
-				}
-			}
-
-			// both to left of frame center, situation #2
-			else if (!direction_old && !direction_new) {
-
-				double reward = std::fabs(errorOldScaled - errorNewScaled);
-
-				if (targetCenterNew > targetCenterOld) {  // frame center has moved closer to objects right
-					r2 = reward;
-				}
-				else { // frame center has moved further from objects right
-					r2 = -reward;
+				else { // target is right of frame center
+					direction_new = true;
 				}
 
-			}
-
-			// Frame center has overshot target. Old to the right and new to the left, situation #3
-			else if (direction_old && !direction_new) {
-
-				double error_old_corrected = std::fabs(std::fabs(targetCenterOld) - center);
-				double error_new_corrected = std::fabs(std::fabs(targetCenterNew) - center);
-				double difference = std::fabs(error_new_corrected - error_old_corrected);
-				double reward = difference / center;
-
-				if (error_old_corrected > error_new_corrected) {  // If move has resulted in a marginally lower error (closer to center)
-					r2 = reward;
+				if (targetCenterOld < center) { // target is left of frame center
+					direction_old = false;
 				}
-				else {
-					r2 = -reward;
+				else { // target is right of frame center
+					direction_old = true;
 				}
-			}
-			else { // old left and new right, situation #4
 
-				double error_old_corrected = std::fabs(std::fabs(targetCenterOld) - center);
-				double error_new_corrected = std::fabs(std::fabs(targetCenterNew) - center);
-				double difference = std::fabs(error_new_corrected - error_old_corrected);
-				double reward = difference / center;
+				//  Both to the right of frame center, situation #1;
+				if (direction_old && direction_new) {
 
-				if (error_old_corrected > error_new_corrected) {  // If move has resulted in a marginally lower error (closer to center)
-					r2 = reward;
+					double reward = std::fabs(errorNewScaled - errorOldScaled);
+
+					if (targetCenterNew > targetCenterOld) { // frame center has moved furthure to object's left
+						r2 = -reward;
+					}
+					else { // frame center has moved closer to object's left
+						r2 = reward;
+					}
 				}
-				else {
-					r2 = -reward;
+
+				// both to left of frame center, situation #2
+				else if (!direction_old && !direction_new) {
+
+					double reward = std::fabs(errorOldScaled - errorNewScaled);
+
+					if (targetCenterNew > targetCenterOld) {  // frame center has moved closer to objects right
+						r2 = reward;
+					}
+					else { // frame center has moved further from objects right
+						r2 = -reward;
+					}
+
+				}
+
+				// Frame center has overshot target. Old to the right and new to the left, situation #3
+				else if (direction_old && !direction_new) {
+
+					double error_old_corrected = std::fabs(std::fabs(targetCenterOld) - center);
+					double error_new_corrected = std::fabs(std::fabs(targetCenterNew) - center);
+					double difference = std::fabs(error_new_corrected - error_old_corrected);
+					double reward = difference / center;
+
+					if (error_old_corrected > error_new_corrected) {  // If move has resulted in a marginally lower error (closer to center)
+						r2 = reward;
+					}
+					else {
+						r2 = -reward;
+					}
+				}
+				else { // old left and new right, situation #4
+
+					double error_old_corrected = std::fabs(std::fabs(targetCenterOld) - center);
+					double error_new_corrected = std::fabs(std::fabs(targetCenterNew) - center);
+					double difference = std::fabs(error_new_corrected - error_old_corrected);
+					double reward = difference / center;
+
+					if (error_old_corrected > error_new_corrected) {  // If move has resulted in a marginally lower error (closer to center)
+						r2 = reward;
+					}
+					else {
+						r2 = -reward;
+					}
 				}
 			}
 

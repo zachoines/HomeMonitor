@@ -65,4 +65,7 @@
   <ItemGroup>
     <Xml Include="haarcascade_frontalface_alt2.xml" />
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="plot.py" />
+  </ItemGroup>
 </Project>

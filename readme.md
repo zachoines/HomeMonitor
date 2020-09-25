@@ -16,11 +16,11 @@
 	* Pan-tilt servo mounts, [like these](https://www.servocity.com/pan-tilt-kits/).
 * Recommend making Python 3 env first 
 	* export WORKON_HOME=$HOME/.virtualenvs
-	* export VIRTUALENVWRAPPER_PYTHON=/usr/bin/python3
-	* export VIRTUALENVWRAPPER_VIRTUALENV=/usr/local/bin/virtualenv
-	* source /usr/local/bin/virtualenvwrapper.sh
-	* export VIRTUALENVWRAPPER_ENV_BIN_DIR=bin
-	* mkvirtualenv build
+	  export VIRTUALENVWRAPPER_PYTHON=/usr/bin/python3
+	  export VIRTUALENVWRAPPER_VIRTUALENV=/usr/local/bin/virtualenv
+	  source /usr/local/bin/virtualenvwrapper.sh
+	  export VIRTUALENVWRAPPER_ENV_BIN_DIR=bin
+	  mkvirtualenv build
 
 * OpenCV 4 c++
 	* [Here](https://cv-tricks.com/installation/opencv-4-1-ubuntu18-04/) is an excellent walkthrough of the process.

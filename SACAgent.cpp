@@ -1,6 +1,8 @@
 ﻿#include "SACAgent.h"
 #include <bits/stdc++.h> 
 #include <iostream>
+#include <string>
+#include <fstream>
 #include <torch/script.h>
 #include <torch/torch.h>
 #include "PolicyNetwork.h"
@@ -32,6 +34,10 @@ SACAgent::SACAgent(int num_inputs, int num_hidden, int num_actions, double actio
 	_policy_net = new PolicyNetwork(num_inputs, num_actions, num_hidden, 0.003, -20, 2, 0.001, action_max, action_min);
 	_value_network = new ValueNetwork(num_inputs, num_hidden);
 	_target_value_network = new ValueNetwork(num_inputs, num_hidden);
+
+	// Logging
+	_lossFileName = "/stat/trainingLoss.txt";
+	_lossPath = get_current_dir_name() + _lossFileName;
 	
 	
 	/*_target_q_network_1 = new QNetwork(num_inputs, num_actions, num_hidden);
@@ -348,14 +354,9 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 	torch::Tensor value_loss = 0.5 * torch::mean(torch::pow(value_predictions - target_value_func.detach(), 2.0));
 
 	
-	// Train Policy Network with Regularization
+	// Training the policy
 	torch::Tensor policy_loss = (_alpha * log_pi_t - torch::min(qf1_pi, qf2_pi)).mean();
-	torch::Tensor mean_reg = 1e-3 * 0.5 * torch::mean(mean.pow(2).sum(1, true));
-	torch::Tensor log_std_reg = 1e-3 * 0.5 * torch::mean(torch::log(std).pow(2).sum(1, true));
-
-	torch::Tensor actor_reg = mean_reg + log_std_reg;
-	policy_loss += actor_reg;
-
+	
 	// Update Policy Network
 	if (pthread_mutex_lock(&_policyNetLock) == 0) {
 		_policy_net->optimizer->zero_grad();
@@ -369,46 +370,62 @@ void SACAgent::update(int batchSize, TrainBuffer* replayBuffer)
 		throw std::runtime_error("could not obtain lock");
 	}
 	
+
+	/*
+	// Determine policy advantage and calc loss
+	torch::Tensor advantage = torch::min(qf1_pi, qf2_pi) - value_predictions.detach();
+	torch::Tensor policy_loss = (_alpha * log_pi_t - advantage).mean();
+
+	// Policy Regularization
+	torch::Tensor mean_reg = 1e-3 * torch::mean(mean.sum(1, true).pow(2.0));
+	torch::Tensor std_reg = 1e-3 * torch::mean(std.sum(1, true).pow(2.0));
+
+	torch::Tensor actor_reg = mean_reg + std_reg;
+	policy_loss += actor_reg;
+	*/
+
 	// Update Q-Value networks
 	_q_net1->optimizer->zero_grad();
 	q_value_loss1.backward();
-	// torch::nn::utils::clip_grad_norm_(_q_net1->parameters(), 0.5);
 	_q_net1->optimizer->step();
 
 	_q_net2->optimizer->zero_grad();
 	q_value_loss2.backward();
-	// torch::nn::utils::clip_grad_norm_(_q_net2->parameters(), 0.5);
 	_q_net2->optimizer->step();
 
 	// Update Value network
 	_value_network->zero_grad();
 	value_loss.backward();
-	// torch::nn::utils::clip_grad_norm_(_value_network->parameters(), 0.5);
 	_value_network->optimizer->step();
 	
 	// Delay update of Target Value and Policy Networks
 	if (_current_update >= _max_delay) {
 		_current_update = 0;
 
-	
 		// Copy over network params with averaging
 		_transfer_params_v2(*_value_network, *_target_value_network, true);
 
-		if (_current_save_delay == _max_save_delay) {
+		if (_current_save_delay >= _max_save_delay) {
 			_current_save_delay = 0;
 			save_checkpoint();
-		}
-
+		}	
 	}
 	else {
+
+		std::string episodeData = std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>
+			(std::chrono::system_clock::now().time_since_epoch()).count()) + ','
+			+ std::to_string(_total_update) + ','
+			+ std::to_string(policy_loss.item().toDouble()) + ','
+			+ std::to_string(value_loss.item().toDouble()) + ','
+			+ std::to_string(q_value_loss1.item().toDouble()) + ','
+			+ std::to_string(q_value_loss2.item().toDouble());
+
+		Utility::appendLineToFile(_lossPath, episodeData);
+
 		_current_save_delay++;
 		_current_update++;
+		_total_update++;
 	}
-
-	std::cout << "Policy Loss: " << policy_loss << std::endl;
-	std::cout << "Value Loss: " << value_loss << std::endl;
-	std::cout << "Q Loss 1: " << q_value_loss1 << std::endl;
-	std::cout << "Q Loss 2: " << q_value_loss2 << std::endl;
 }
 
 // Simplified update function with 4 QNetworks and no regularization

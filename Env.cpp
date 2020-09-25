@@ -142,13 +142,19 @@ SR Env::step(double actions[NUM_SERVOS][NUM_ACTIONS], bool rescale)
 			std::cout << std::endl;
 		}
 
-		_pids[servo]->setWeights(actions[servo][0], actions[servo][1], actions[servo][2]);
-		double newAngle = _pids[servo]->update(_currentData[servo].Obj, 1000.0 / static_cast<double>(_params->rate));
+		double newAngle = 0.0;
+		if (!_params->config->usePIDs) {
+			newAngle = actions[servo][0];
+		}
+		else {
+			_pids[servo]->setWeights(actions[servo][0], actions[servo][1], actions[servo][2]);
+			newAngle = _pids[servo]->update(_currentData[servo].Obj, 1000.0 / static_cast<double>(_params->rate));
+		}
+
 		newAngle = Utility::mapOutput(newAngle, _params->config->pidOutputLow, _params->config->pidOutputHigh, _params->config->angleLow, _params->config->angleHigh);
 		if (_invert[servo]) { newAngle = _params->config->angleHigh - newAngle; }
 		_lastAngles[servo] = _currentAngles[servo];
 		_currentAngles[servo] = newAngle;
-	
 		Utility::runServo(servo, newAngle);
 	}
 
@@ -171,7 +177,14 @@ SR Env::step(double actions[NUM_SERVOS][NUM_ACTIONS], bool rescale)
 		}
 
 		// Fill out the step results
-		stepResults.servos[servo].nextState.pidStateData = _pids[servo]->mockUpdate(currentError);
+		if (!_params->config->usePIDs) {
+			_pids[servo]->update(currentError, 1000.0 / static_cast<double>(_params->rate));
+			stepResults.servos[servo].nextState.pidStateData = _pids[servo]->getState(true);
+		}
+		else {
+			stepResults.servos[servo].nextState.pidStateData = _pids[servo]->mockUpdate(currentError);
+		}
+
 		stepResults.servos[servo].nextState.obj = _currentData[servo].Obj / _currentData[servo].Frame;
 		stepResults.servos[servo].nextState.lastAngle = _lastAngles[servo] / _params->config->angleHigh;
 		stepResults.servos[servo].nextState.currentAngle = _currentAngles[servo] / _params->config->angleHigh;

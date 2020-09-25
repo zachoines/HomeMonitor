@@ -54,7 +54,6 @@ double PID::update(double input, double sleep) {
 
 	// Delay execution to rate
 	if (sleep > _deltaTime * 1000.0) {
-		// std::cout << "Not enough: " << deltaTime * 1000.0 << std::endl;
 		double diff = sleep - _deltaTime;
 		_prevTime = _currTime;
 		Utility::msleep(static_cast<long>(diff));
@@ -135,9 +134,6 @@ state PID::mockUpdate(double input, double sleep, bool normalize)
 	// Error
 	g.e = input - _setpoint;
 
-	// Delta error
-	// g.de = g.e - _prevError;
-
 	// Delta input
 	g.din = (_last_input - input);
 
@@ -168,9 +164,6 @@ state PID::getState(bool normalize)
 	// Error
 	g.e = _cP;
 
-	// Delta error
-	// g.de = _deltaError;
-
 	// Integral of error with respect to time
 	g.i = _cI;
 
@@ -178,7 +171,7 @@ state PID::getState(bool normalize)
 	g.din = _deltaInput;
 
 	// Negative Derivative of input with respect to time.
-	g.d = -1.0 * (_cD * _deltaInput);
+	g.d = (_deltaTime > 0.0) ? -1.0 * (_cD * _deltaInput) : 0.0;
 
 	// Just divide by the max possible values, preserve sign
 	if (normalize) {
